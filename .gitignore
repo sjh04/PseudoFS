@@ -1,5 +1,5 @@
 # Build
-build/
+/build/
 cmake-build-*/
 *.o
 *.d
@@ -19,6 +19,9 @@ pfs
 *.swp
 *.swo
 *~
+
+# Personal
+CLAUDE.local.md
 
 # OS
 .DS_Store
