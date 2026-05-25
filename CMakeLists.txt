@@ -7,17 +7,20 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(Curses REQUIRED)
 
-# Main executable (exclude test files)
-file(GLOB_RECURSE SOURCES src/*.cpp)
+# Collect all source files except main.cpp into a library
+file(GLOB_RECURSE LIB_SOURCES src/*.cpp)
+list(FILTER LIB_SOURCES EXCLUDE REGEX "src/main\\.cpp$")
 
-add_executable(pfs ${SOURCES})
-
-target_include_directories(pfs PRIVATE
+add_library(pfs_lib STATIC ${LIB_SOURCES})
+target_include_directories(pfs_lib PUBLIC
     ${CMAKE_SOURCE_DIR}/include
     ${CURSES_INCLUDE_DIRS}
 )
+target_link_libraries(pfs_lib PUBLIC ${CURSES_LIBRARIES})
 
-target_link_libraries(pfs PRIVATE ${CURSES_LIBRARIES})
+# Main executable
+add_executable(pfs src/main.cpp)
+target_link_libraries(pfs PRIVATE pfs_lib)
 
 # Testing
 include(FetchContent)
@@ -35,13 +38,7 @@ file(GLOB_RECURSE TEST_SOURCES tests/*.cpp)
 
 if(TEST_SOURCES)
     add_executable(pfs_tests ${TEST_SOURCES})
-
-    target_include_directories(pfs_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/include
-        ${CMAKE_SOURCE_DIR}/src
-    )
-
-    target_link_libraries(pfs_tests PRIVATE GTest::gtest_main)
+    target_link_libraries(pfs_tests PRIVATE pfs_lib GTest::gtest_main)
 
     include(GoogleTest)
     gtest_discover_tests(pfs_tests)
