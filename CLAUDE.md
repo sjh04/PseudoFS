@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-PseudoFS — OS course design project. A multi-user, multi-level directory file system simulator with dual engines (UNIX inode + FAT16) behind a VFS abstraction layer. C++17, ncurses TUI, 4-person team, 3-week sprint.
+PseudoFS — OS course design project. A multi-user, multi-level directory file system simulator with dual engines (UNIX inode + FAT16) behind a VFS abstraction layer. C++17, ncurses TUI, 4-person team, 2-week sprint (weeks 13-14).
 
 ## Build
 
@@ -24,7 +24,7 @@ Five layers, top to bottom:
 4. **FS Engines** — `src/fs/unix/` (inode + group-linked free blocks + mixed indexing) and `src/fs/fat16/` (FAT table + cluster chain). Both implement `IFileSystem`.
 5. **Block Device** (`src/core/`) — virtual disk backed by a host file (`pfs.img`), block-level read/write/seek
 
-Headers and sources live together in `src/` subdirectories (no separate `include/` tree).
+Headers (`.h`) go in `include/<layer>/`, sources (`.cpp`) go in `src/<layer>/`.
 
 ## Key constants
 
