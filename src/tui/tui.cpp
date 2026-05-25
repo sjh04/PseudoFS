@@ -4,14 +4,14 @@
 
 #include <cstring>
 #include <sstream>
+#include <string>
 #include <vector>
 
+#include "core/vfs.h"
 #include "shell/command_registry.h"
 
 namespace pfs {
 
-// Internal structure to hold all ncurses WINDOW pointers.
-// Defined in .cpp so the header stays clean of ncurses types.
 struct Tui::Windows {
     WINDOW* title_bar;
     WINDOW* tree_win;
@@ -33,13 +33,17 @@ static int term_h(int max_y) { return max_y - tree_h(max_y) - 2; }
 static int tree_w(int max_x) { return max_x * 0.4; }
 static int disk_w(int max_x) { return max_x - tree_w(max_x); }
 
+static std::string make_prompt(IFileSystem* fs) {
+    std::string path = fs ? fs->fs_pwd() : "/";
+    return "root@PFS:" + path + " $ ";
+}
+
 Tui::Tui(IFileSystem& fs, UserManager& um, CommandRegistry& reg)
     : fs_(&fs), um_(&um), reg_(&reg), running_(false), win_(nullptr) {}
 
 Tui::~Tui() { delete win_; }
 
 void Tui::run() {
-    // --- ncurses init ---
     setlocale(LC_ALL, "");
     initscr();
     cbreak();
@@ -49,36 +53,49 @@ void Tui::run() {
     mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, nullptr);
     start_color();
 
-    init_pair(1, COLOR_GREEN, COLOR_BLACK);   // directories
-    init_pair(2, COLOR_WHITE, COLOR_BLUE);    // selected / title
-    init_pair(3, COLOR_YELLOW, COLOR_BLACK);  // regular files
-    init_pair(4, COLOR_CYAN, COLOR_BLACK);    // disk info
-    init_pair(5, COLOR_RED, COLOR_BLACK);     // errors
+    init_pair(1, COLOR_GREEN, COLOR_BLACK);
+    init_pair(2, COLOR_WHITE, COLOR_BLUE);
+    init_pair(3, COLOR_YELLOW, COLOR_BLACK);
+    init_pair(4, COLOR_CYAN, COLOR_BLACK);
+    init_pair(5, COLOR_RED, COLOR_BLACK);
 
-    // --- create windows ---
-    Windows w;
+    delete win_;
+    win_ = new Windows;
+    auto& w = *win_;
     getmaxyx(stdscr, w.max_y, w.max_x);
     w.title_bar = newwin(1, w.max_x, 0, 0);
     w.tree_win = newwin(tree_h(w.max_y), tree_w(w.max_x), 1, 0);
     w.disk_win = newwin(tree_h(w.max_y), disk_w(w.max_x), 1, tree_w(w.max_x));
     w.term_win = newwin(term_h(w.max_y), w.max_x, 1 + tree_h(w.max_y), 0);
     w.status_bar = newwin(1, w.max_x, w.max_y - 1, 0);
-    win_ = &w;
 
     keypad(w.term_win, TRUE);
     scrollok(w.term_win, TRUE);
 
-    // --- terminal state ---
     std::string input_buf;
-    std::vector<std::string> output_lines;
-    constexpr int kMaxOutputLines = 200;
     std::vector<std::string> cmd_history;
     int history_idx = -1;
-    std::string saved_input;  // what user typed before browsing history
+    std::string saved_input;
 
-    // --- draw initial layout ---
+    auto draw_prompt = [&]() {
+        std::string p = make_prompt(fs_);
+        wattron(w.term_win, COLOR_PAIR(1));
+        wprintw(w.term_win, "%s", p.c_str());
+        wattroff(w.term_win, COLOR_PAIR(1));
+    };
+
+    auto redraw_input_line = [&]() {
+        std::string p = make_prompt(fs_);
+        int y, x;
+        getyx(w.term_win, y, x);
+        wmove(w.term_win, y, 0);
+        wclrtoeol(w.term_win);
+        wprintw(w.term_win, "%s%s", p.c_str(), input_buf.c_str());
+    };
+
     wbkgd(w.title_bar, COLOR_PAIR(2));
-    mvwprintw(w.title_bar, 0, 1, " PFS v2.0 | user: root | F1 Help  F2 SwitchFS  F10 Exit ");
+    mvwprintw(w.title_bar, 0, 1,
+              " PFS v2.0 | user: root | F1 Help  F2 SwitchFS  F10 Exit ");
     wrefresh(w.title_bar);
 
     draw_box_title(w.tree_win, "Directory Tree");
@@ -91,7 +108,7 @@ void Tui::run() {
 
     draw_box_title(w.term_win, " Terminal ");
     wmove(w.term_win, 1, 1);
-    wprintw(w.term_win, "root@PFS:/ $ ");
+    draw_prompt();
     wrefresh(w.term_win);
 
     wattron(w.status_bar, COLOR_PAIR(2));
@@ -102,7 +119,6 @@ void Tui::run() {
 
     refresh();
 
-    // --- main loop ---
     running_ = true;
     while (running_) {
         int ch = wgetch(w.term_win);
@@ -112,16 +128,13 @@ void Tui::run() {
         case KEY_ENTER: {
             if (input_buf.empty()) break;
 
-            // Save to history
             cmd_history.push_back(input_buf);
             history_idx = -1;
 
-            // Display the command in terminal output
             wattron(w.term_win, COLOR_PAIR(3));
             wprintw(w.term_win, "%s\n", input_buf.c_str());
             wattroff(w.term_win, COLOR_PAIR(3));
 
-            // Execute
             std::string output;
             int ret = reg_->execute(input_buf, *fs_, *um_, output);
 
@@ -133,12 +146,8 @@ void Tui::run() {
                 wprintw(w.term_win, "  %s\n", output.c_str());
             }
 
-            // Prompt for next command
-            wattron(w.term_win, COLOR_PAIR(1));
-            wprintw(w.term_win, "root@PFS:/ $ ");
-            wattroff(w.term_win, COLOR_PAIR(1));
-
             input_buf.clear();
+            draw_prompt();
             wrefresh(w.term_win);
             break;
         }
@@ -147,12 +156,7 @@ void Tui::run() {
         case '\b': {
             if (!input_buf.empty()) {
                 input_buf.pop_back();
-                // Redraw prompt + input
-                int y, x;
-                getyx(w.term_win, y, x);
-                mvwprintw(w.term_win, y, 0, "root@PFS:/ $ %s    ",
-                          input_buf.c_str());
-                wclrtoeol(w.term_win);
+                redraw_input_line();
             }
             break;
         }
@@ -165,34 +169,24 @@ void Tui::run() {
                     --history_idx;
                 }
                 input_buf = cmd_history[history_idx];
-                int y, x;
-                getyx(w.term_win, y, x);
-                mvwprintw(w.term_win, y, 0, "root@PFS:/ $ %s    ",
-                          input_buf.c_str());
-                wclrtoeol(w.term_win);
+                redraw_input_line();
             }
             break;
         }
         case KEY_DOWN: {
             if (history_idx != -1) {
-                if (history_idx <
-                    static_cast<int>(cmd_history.size()) - 1) {
+                if (history_idx < static_cast<int>(cmd_history.size()) - 1) {
                     ++history_idx;
                     input_buf = cmd_history[history_idx];
                 } else {
                     history_idx = -1;
                     input_buf = saved_input;
                 }
-                int y, x;
-                getyx(w.term_win, y, x);
-                mvwprintw(w.term_win, y, 0, "root@PFS:/ $ %s    ",
-                          input_buf.c_str());
-                wclrtoeol(w.term_win);
+                redraw_input_line();
             }
             break;
         }
         case KEY_F(1): {
-            // Help popup
             int popup_h = 16, popup_w = 50;
             int popup_y = (w.max_y - popup_h) / 2;
             int popup_x = (w.max_x - popup_w) / 2;
@@ -209,42 +203,31 @@ void Tui::run() {
             wrefresh(help_win);
             wgetch(help_win);
             delwin(help_win);
-            // Redraw everything
-            touchwin(w.title_bar);
-            wrefresh(w.title_bar);
-            touchwin(w.tree_win);
-            wrefresh(w.tree_win);
-            touchwin(w.disk_win);
-            wrefresh(w.disk_win);
-            touchwin(w.term_win);
-            wrefresh(w.term_win);
-            touchwin(w.status_bar);
-            wrefresh(w.status_bar);
+            touchwin(w.title_bar); wrefresh(w.title_bar);
+            touchwin(w.tree_win);  wrefresh(w.tree_win);
+            touchwin(w.disk_win);  wrefresh(w.disk_win);
+            touchwin(w.term_win);  wrefresh(w.term_win);
+            touchwin(w.status_bar); wrefresh(w.status_bar);
             refresh();
             break;
         }
         case KEY_F(2): {
-            // Switch FS — stub: will call switch_fs() when dual FS ready
             int y, x;
             getyx(w.term_win, y, x);
             wattron(w.term_win, COLOR_PAIR(3));
-            mvwprintw(w.term_win, y, 0, "[F2] FS switch — not yet available");
+            wprintw(w.term_win, "\n[F2] FS switch — not yet available\n");
             wattroff(w.term_win, COLOR_PAIR(3));
-            wprintw(w.term_win, "\nroot@PFS:/ $ %s", input_buf.c_str());
+            draw_prompt();
+            wprintw(w.term_win, "%s", input_buf.c_str());
+            wrefresh(w.term_win);
             break;
         }
         case KEY_F(5): {
-            // Refresh: redraw all panels
-            touchwin(w.title_bar);
-            wrefresh(w.title_bar);
-            touchwin(w.tree_win);
-            wrefresh(w.tree_win);
-            touchwin(w.disk_win);
-            wrefresh(w.disk_win);
-            touchwin(w.term_win);
-            wrefresh(w.term_win);
-            touchwin(w.status_bar);
-            wrefresh(w.status_bar);
+            touchwin(w.title_bar); wrefresh(w.title_bar);
+            touchwin(w.tree_win);  wrefresh(w.tree_win);
+            touchwin(w.disk_win);  wrefresh(w.disk_win);
+            touchwin(w.term_win);  wrefresh(w.term_win);
+            touchwin(w.status_bar); wrefresh(w.status_bar);
             refresh();
             break;
         }
@@ -252,7 +235,6 @@ void Tui::run() {
             running_ = false;
             break;
         case KEY_RESIZE: {
-            // Recreate windows on terminal resize
             delwin(w.title_bar);
             delwin(w.tree_win);
             delwin(w.disk_win);
@@ -262,12 +244,9 @@ void Tui::run() {
             refresh();
             getmaxyx(stdscr, w.max_y, w.max_x);
             w.title_bar = newwin(1, w.max_x, 0, 0);
-            w.tree_win =
-                newwin(tree_h(w.max_y), tree_w(w.max_x), 1, 0);
-            w.disk_win =
-                newwin(tree_h(w.max_y), disk_w(w.max_x), 1, tree_w(w.max_x));
-            w.term_win =
-                newwin(term_h(w.max_y), w.max_x, 1 + tree_h(w.max_y), 0);
+            w.tree_win = newwin(tree_h(w.max_y), tree_w(w.max_x), 1, 0);
+            w.disk_win = newwin(tree_h(w.max_y), disk_w(w.max_x), 1, tree_w(w.max_x));
+            w.term_win = newwin(term_h(w.max_y), w.max_x, 1 + tree_h(w.max_y), 0);
             w.status_bar = newwin(1, w.max_x, w.max_y - 1, 0);
             keypad(w.term_win, TRUE);
             scrollok(w.term_win, TRUE);
@@ -280,7 +259,8 @@ void Tui::run() {
             draw_box_title(w.disk_win, "Disk Usage");
             wrefresh(w.disk_win);
             draw_box_title(w.term_win, " Terminal ");
-            wprintw(w.term_win, "root@PFS:/ $ %s", input_buf.c_str());
+            draw_prompt();
+            wprintw(w.term_win, "%s", input_buf.c_str());
             wrefresh(w.term_win);
             wattron(w.status_bar, COLOR_PAIR(2));
             mvwprintw(w.status_bar, 0, 0,
@@ -292,7 +272,6 @@ void Tui::run() {
             break;
         }
         default: {
-            // Printable characters
             if (ch >= 32 && ch < 127) {
                 input_buf.push_back(static_cast<char>(ch));
                 waddch(w.term_win, static_cast<char>(ch));
@@ -303,12 +282,12 @@ void Tui::run() {
         }
     }
 
-    // --- cleanup ---
     delwin(w.title_bar);
     delwin(w.tree_win);
     delwin(w.disk_win);
     delwin(w.term_win);
     delwin(w.status_bar);
+    delete win_;
     win_ = nullptr;
     endwin();
 }

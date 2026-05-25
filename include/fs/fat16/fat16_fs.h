@@ -79,10 +79,11 @@ public:
     std::string fs_type_name() const override;
     DiskUsage fs_disk_usage() const override;
 
-    // Set current user for permission checks (placeholder)
     void set_user(uint16_t uid, uint16_t gid);
+    void set_disk_path(const std::string& path);
 
 private:
+    void sync();
     // --- FAT16 disk layout constants ---
     static constexpr uint32_t kBootBlk = 0;
     static constexpr uint32_t kFat1Start = 1;
@@ -107,6 +108,7 @@ private:
     uint16_t cur_uid_;
     uint16_t cur_gid_;
     bool mounted_;
+    std::string disk_path_;
 
     // --- Internal helpers ---
     uint32_t cluster_to_block(uint16_t cluster) const;
