@@ -62,6 +62,7 @@ int UnixFs::fs_format() {
     cwd_ino_ = root_ino_;
     cwd_path_ = "/";
     mounted_ = true;
+    sync();
     return 0;
 }
 
@@ -120,6 +121,7 @@ int UnixFs::fs_create(const char* path, uint16_t mode) {
     imng_.write_back(parent_ip);
     imng_.put(new_ip);
     imng_.put(parent_ip);
+    sync();
     return 0;
 }
 
@@ -146,7 +148,11 @@ int UnixFs::fs_open(const char* path, int flags) {
 }
 
 int UnixFs::fs_close(int fd) {
-    return oft_.free_fd(cur_uid_, fd);
+    int ret = oft_.free_fd(cur_uid_, fd);
+    if (ret == 0) {
+        sync();
+    }
+    return ret;
 }
 
 ssize_t UnixFs::fs_read(int fd, void* buf, size_t len) {
@@ -288,6 +294,7 @@ int UnixFs::fs_delete(const char* path) {
     imng_.write_back(parent_ip);
     imng_.put(parent_ip);
     imng_.put(ip);
+    sync();
     return 0;
 }
 
@@ -323,6 +330,7 @@ int UnixFs::fs_mkdir(const char* path) {
     imng_.write_back(parent_ip);
     imng_.put(new_ip);
     imng_.put(parent_ip);
+    sync();
     return 0;
 }
 
@@ -363,6 +371,7 @@ int UnixFs::fs_rmdir(const char* path) {
     imng_.write_back(parent_ip);
     imng_.put(parent_ip);
     imng_.put(ip);
+    sync();
     return 0;
 }
 
@@ -507,6 +516,7 @@ int UnixFs::fs_chmod(const char* path, uint16_t mode) {
     ip->i_dirty = true;
     imng_.write_back(ip);
     imng_.put(ip);
+    sync();
     return 0;
 }
 
@@ -547,6 +557,7 @@ int UnixFs::fs_link(const char* src, const char* dst) {
     imng_.write_back(parent_ip);
     imng_.put(parent_ip);
     imng_.put(src_ip);
+    sync();
     return 0;
 }
 
@@ -568,6 +579,18 @@ DiskUsage UnixFs::fs_disk_usage() const {
 void UnixFs::set_user(uint16_t uid, uint16_t gid) {
     cur_uid_ = uid;
     cur_gid_ = gid;
+}
+
+void UnixFs::set_disk_path(const std::string& path) {
+    disk_path_ = path;
+}
+
+void UnixFs::sync() {
+    if (disk_path_.empty()) {
+        return;
+    }
+    sb_.flush();
+    dev_.save_to_file(disk_path_.c_str());
 }
 
 }  // namespace pfs

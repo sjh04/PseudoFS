@@ -42,7 +42,14 @@ public:
 
     void set_user(uint16_t uid, uint16_t gid);
 
+    // Set the disk image path for auto-sync. When set, every write
+    // operation (create/write/delete/mkdir/rmdir/chmod/link) flushes
+    // the superblock and saves the disk image to this file.
+    // Prevents data loss on crash.
+    void set_disk_path(const std::string& path);
+
 private:
+    void sync();
     BlockDevice& dev_;
     SuperBlock sb_;
     InodeManager imng_;
@@ -55,6 +62,7 @@ private:
     uint16_t cur_uid_;
     uint16_t cur_gid_;
     bool mounted_;
+    std::string disk_path_;
 };
 
 }  // namespace pfs
