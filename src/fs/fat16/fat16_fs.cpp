@@ -345,26 +345,48 @@ int Fat16Fs::fs_chdir(const char* path) {
     std::string name;
     if (resolve_path(path, cluster, parent, name) != 0) return -1;
 
-    // Also need to check that the final component is a directory
-    std::vector<FAT16DirEntry> entries;
-    read_dir_entries(parent, entries);
-    for (auto& e : entries) {
-        if (to_upper(name) == entry_name(e) &&
-            (e.attr & FAT16_ATTR_DIRECTORY)) {
-            if (path[0] == '/') {
-                cwd_path_ = path;
-                cwd_cluster_ = e.first_cluster;
-            } else {
-                if (cwd_path_ == "/")
-                    cwd_path_ = "/" + std::string(path);
-                else
-                    cwd_path_ = cwd_path_ + "/" + std::string(path);
-                cwd_cluster_ = e.first_cluster;
-            }
-            return 0;
-        }
+    cwd_cluster_ = cluster;
+
+    if (cwd_cluster_ == kRootCluster) {
+        cwd_path_ = "/";
+        return 0;
     }
-    return -1;
+
+    if (path[0] == '/') {
+        cwd_path_ = path;
+    } else {
+        std::vector<std::string> parts;
+        std::string base = cwd_path_;
+        size_t s = 0;
+        while (s < base.size()) {
+            if (base[s] == '/') { s++; continue; }
+            size_t e2 = base.find('/', s);
+            if (e2 == std::string::npos) e2 = base.size();
+            parts.push_back(base.substr(s, e2 - s));
+            s = e2 + 1;
+        }
+        std::string rel(path);
+        s = 0;
+        while (s < rel.size()) {
+            if (rel[s] == '/') { s++; continue; }
+            size_t e2 = rel.find('/', s);
+            if (e2 == std::string::npos) e2 = rel.size();
+            std::string comp = rel.substr(s, e2 - s);
+            if (comp == "..") {
+                if (!parts.empty()) parts.pop_back();
+            } else if (comp != ".") {
+                parts.push_back(comp);
+            }
+            s = e2 + 1;
+        }
+        cwd_path_ = "/";
+        for (size_t i = 0; i < parts.size(); i++) {
+            if (i > 0) cwd_path_ += "/";
+            cwd_path_ += parts[i];
+        }
+        if (cwd_path_.empty()) cwd_path_ = "/";
+    }
+    return 0;
 }
 
 int Fat16Fs::fs_ls(const char* path, std::vector<DirEntry>& out) {
@@ -472,10 +494,16 @@ static size_t data_size(const std::vector<uint8_t>& data) {
 
 static std::string entry_name(const FAT16DirEntry& e) {
     std::string n;
-    for (int i = 0; i < 8 && e.name[i] != ' '; ++i) n += e.name[i];
-    if (e.ext[0] != ' ') {
+    for (int i = 0; i < 8 && e.name[i] != ' ' && e.name[i] != '\0'; ++i)
+        n += e.name[i];
+    bool has_ext = false;
+    for (int i = 0; i < 3; ++i) {
+        if (e.ext[i] != ' ' && e.ext[i] != '\0') { has_ext = true; break; }
+    }
+    if (has_ext) {
         n += '.';
-        for (int i = 0; i < 3 && e.ext[i] != ' '; ++i) n += e.ext[i];
+        for (int i = 0; i < 3 && e.ext[i] != ' ' && e.ext[i] != '\0'; ++i)
+            n += e.ext[i];
     }
     return n;
 }
