@@ -184,7 +184,7 @@ bool DirectoryManager::is_empty(MemINode* dir_ip) {
 uint16_t DirectoryManager::namei(const char* path, uint16_t cwd_ino, uint16_t root_ino) {
     auto parts = split_path(path);
     if (parts.empty()) {
-        return cwd_ino;
+        return (path[0] == '/') ? root_ino : cwd_ino;
     }
 
     // Determine starting point: absolute path starts from root

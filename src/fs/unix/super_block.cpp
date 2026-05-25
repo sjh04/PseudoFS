@@ -201,4 +201,13 @@ uint16_t SuperBlock::total_inodes() const {
     return INODE_TOTAL;
 }
 
+uint16_t SuperBlock::root_inode() const {
+    return sb_.s_root_ino;
+}
+
+void SuperBlock::set_root_inode(uint16_t ino) {
+    sb_.s_root_ino = ino;
+    sb_.s_fmod = 1;
+}
+
 }  // namespace pfs
