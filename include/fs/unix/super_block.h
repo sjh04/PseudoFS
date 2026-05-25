@@ -20,6 +20,8 @@ struct DiskSuperBlock {
     uint16_t s_ninode;              // entries in free inode stack
     uint16_t s_inode[NICINOD];      // free inode stack
     uint16_t s_rinode;              // remembered inode for linear scan
+    uint16_t s_free_total;          // total free data blocks
+    uint16_t s_inode_total;         // total free inodes
     uint8_t s_fmod;                 // modification flag
 };
 
