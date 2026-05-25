@@ -22,6 +22,7 @@ struct DiskSuperBlock {
     uint16_t s_rinode;              // remembered inode for linear scan
     uint16_t s_free_total;          // total free data blocks
     uint16_t s_inode_total;         // total free inodes
+    uint16_t s_root_ino;            // root directory inode number
     uint8_t s_fmod;                 // modification flag
 };
 
@@ -59,6 +60,8 @@ public:
     uint16_t free_inode_count() const;
     uint16_t total_blocks() const;
     uint16_t total_inodes() const;
+    uint16_t root_inode() const;
+    void set_root_inode(uint16_t ino);
 
 private:
     BlockDevice& dev_;
