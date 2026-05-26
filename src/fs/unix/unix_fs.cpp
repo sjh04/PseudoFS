@@ -298,6 +298,38 @@ int UnixFs::fs_delete(const char* path) {
     return 0;
 }
 
+int UnixFs::fs_delete_recursive(const char* path) {
+    FileStat st{};
+    if (fs_stat(path, st) != 0) {
+        return -1;
+    }
+
+    if (st.type == TYPE_FILE) {
+        return fs_delete(path);
+    }
+
+    // It's a directory — delete all children first
+    std::vector<DirEntry> entries;
+    if (fs_ls(path, entries) != 0) {
+        return -1;
+    }
+
+    for (auto& e : entries) {
+        if (std::strncmp(e.name, ".", MAX_FILENAME) == 0 ||
+            std::strncmp(e.name, "..", MAX_FILENAME) == 0) {
+            continue;
+        }
+        std::string child_path = std::string(path);
+        if (child_path.back() != '/') child_path += "/";
+        child_path += e.name;
+        if (fs_delete_recursive(child_path.c_str()) != 0) {
+            return -1;
+        }
+    }
+
+    return fs_rmdir(path);
+}
+
 // ---- Directory operations ----
 
 int UnixFs::fs_mkdir(const char* path) {

@@ -324,6 +324,31 @@ int Fat16Fs::fs_delete(const char* path) {
     return ret;
 }
 
+int Fat16Fs::fs_delete_recursive(const char* path) {
+    if (!mounted_) return -1;
+
+    FileStat st{};
+    if (fs_stat(path, st) != 0) return -1;
+
+    if (st.type == TYPE_FILE) {
+        return fs_delete(path);
+    }
+
+    std::vector<DirEntry> entries;
+    if (fs_ls(path, entries) != 0) return -1;
+
+    for (auto& e : entries) {
+        std::string n(e.name);
+        if (n == "." || n == "..") continue;
+        std::string child = std::string(path);
+        if (child.back() != '/') child += "/";
+        child += n;
+        if (fs_delete_recursive(child.c_str()) != 0) return -1;
+    }
+
+    return fs_rmdir(path);
+}
+
 // ======================== Directory Operations ========================
 
 int Fat16Fs::fs_mkdir(const char* path) {

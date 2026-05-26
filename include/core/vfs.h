@@ -53,6 +53,7 @@ public:
     virtual ssize_t fs_read(int fd, void* buf, size_t len) = 0;
     virtual ssize_t fs_write(int fd, const void* buf, size_t len) = 0;
     virtual int fs_delete(const char* path) = 0;
+    virtual int fs_delete_recursive(const char* path) = 0;
 
     virtual int fs_mkdir(const char* path) = 0;
     virtual int fs_rmdir(const char* path) = 0;
