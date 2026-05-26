@@ -65,6 +65,7 @@ public:
     ssize_t fs_read(int fd, void* buf, size_t len) override;
     ssize_t fs_write(int fd, const void* buf, size_t len) override;
     int fs_delete(const char* path) override;
+    int fs_delete_recursive(const char* path) override;
 
     int fs_mkdir(const char* path) override;
     int fs_rmdir(const char* path) override;
