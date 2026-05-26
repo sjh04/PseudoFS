@@ -137,6 +137,8 @@ private:
     void fat16_to_vfs_entry(const FAT16DirEntry& fe, DirEntry& ve) const;
     void timestamp(uint16_t& t, uint16_t& d) const;
     uint32_t count_clusters(uint16_t start) const;
+    uint32_t get_file_size(uint16_t first_cluster) const;
+    void update_file_size(uint16_t first_cluster, uint32_t new_size);
 };
 
 constexpr uint16_t Fat16Fs::kRootCluster;
