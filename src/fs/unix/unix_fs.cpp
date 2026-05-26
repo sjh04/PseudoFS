@@ -16,7 +16,8 @@ UnixFs::UnixFs(BlockDevice& dev)
       cwd_path_("/"),
       cur_uid_(0),
       cur_gid_(0),
-      mounted_(false) {}
+      mounted_(false),
+      user_slot_(0) {}
 
 // ---- Lifecycle ----
 
@@ -98,7 +99,11 @@ int UnixFs::fs_create(const char* path, uint16_t mode) {
         return -1;
     }
 
-    // Check if name already exists
+    if (!check_access(parent_ip, O_WRITE)) {
+        imng_.put(parent_ip);
+        return -1;
+    }
+
     if (dmng_.lookup(parent_ip, basename.c_str()) != INVALID_BLK) {
         imng_.put(parent_ip);
         return -1;
@@ -131,7 +136,17 @@ int UnixFs::fs_open(const char* path, int flags) {
         return -1;
     }
 
-    int fd = oft_.alloc_fd(cur_uid_, ino, static_cast<uint8_t>(flags));
+    MemINode* ip = imng_.get(ino);
+    if (ip == nullptr) {
+        return -1;
+    }
+    if (!check_access(ip, static_cast<uint8_t>(flags))) {
+        imng_.put(ip);
+        return -1;
+    }
+    imng_.put(ip);
+
+    int fd = oft_.alloc_fd(user_slot_, ino, static_cast<uint8_t>(flags));
     if (fd < 0) {
         return -1;
     }
@@ -139,7 +154,7 @@ int UnixFs::fs_open(const char* path, int flags) {
     if (flags & O_APPEND) {
         MemINode* ip = imng_.get(ino);
         if (ip != nullptr) {
-            oft_.set_offset(cur_uid_, fd, ip->di.di_size);
+            oft_.set_offset(user_slot_, fd, ip->di.di_size);
             imng_.put(ip);
         }
     }
@@ -148,7 +163,7 @@ int UnixFs::fs_open(const char* path, int flags) {
 }
 
 int UnixFs::fs_close(int fd) {
-    int ret = oft_.free_fd(cur_uid_, fd);
+    int ret = oft_.free_fd(user_slot_, fd);
     if (ret == 0) {
         sync();
     }
@@ -156,20 +171,20 @@ int UnixFs::fs_close(int fd) {
 }
 
 ssize_t UnixFs::fs_read(int fd, void* buf, size_t len) {
-    if (!oft_.is_valid(cur_uid_, fd)) {
+    if (!oft_.is_valid(user_slot_, fd)) {
         return -1;
     }
-    if (!(oft_.get_flags(cur_uid_, fd) & O_READ)) {
+    if (!(oft_.get_flags(user_slot_, fd) & O_READ)) {
         return -1;
     }
 
-    uint16_t ino = oft_.get_inode(cur_uid_, fd);
+    uint16_t ino = oft_.get_inode(user_slot_, fd);
     MemINode* ip = imng_.get(ino);
     if (ip == nullptr) {
         return -1;
     }
 
-    uint32_t offset = oft_.get_offset(cur_uid_, fd);
+    uint32_t offset = oft_.get_offset(user_slot_, fd);
     uint32_t file_size = ip->di.di_size;
 
     if (offset >= file_size) {
@@ -203,26 +218,26 @@ ssize_t UnixFs::fs_read(int fd, void* buf, size_t len) {
     ip->i_dirty = true;
     imng_.put(ip);
 
-    oft_.set_offset(cur_uid_, fd, offset + bytes_read);
+    oft_.set_offset(user_slot_, fd, offset + bytes_read);
     return static_cast<ssize_t>(bytes_read);
 }
 
 ssize_t UnixFs::fs_write(int fd, const void* buf, size_t len) {
-    if (!oft_.is_valid(cur_uid_, fd)) {
+    if (!oft_.is_valid(user_slot_, fd)) {
         return -1;
     }
-    uint8_t flags = oft_.get_flags(cur_uid_, fd);
+    uint8_t flags = oft_.get_flags(user_slot_, fd);
     if (!(flags & O_WRITE) && !(flags & O_APPEND)) {
         return -1;
     }
 
-    uint16_t ino = oft_.get_inode(cur_uid_, fd);
+    uint16_t ino = oft_.get_inode(user_slot_, fd);
     MemINode* ip = imng_.get(ino);
     if (ip == nullptr) {
         return -1;
     }
 
-    uint32_t offset = oft_.get_offset(cur_uid_, fd);
+    uint32_t offset = oft_.get_offset(user_slot_, fd);
     auto* src = static_cast<const uint8_t*>(buf);
     size_t bytes_written = 0;
     uint8_t blk_buf[BLOCK_SIZE];
@@ -254,7 +269,7 @@ ssize_t UnixFs::fs_write(int fd, const void* buf, size_t len) {
     imng_.write_back(ip);
     imng_.put(ip);
 
-    oft_.set_offset(cur_uid_, fd, new_end);
+    oft_.set_offset(user_slot_, fd, new_end);
     return static_cast<ssize_t>(bytes_written);
 }
 
@@ -283,6 +298,12 @@ int UnixFs::fs_delete(const char* path) {
     }
 
     if (ip->di.di_mode & MODE_DIR) {
+        imng_.put(ip);
+        imng_.put(parent_ip);
+        return -1;
+    }
+
+    if (!check_access(parent_ip, O_WRITE)) {
         imng_.put(ip);
         imng_.put(parent_ip);
         return -1;
@@ -344,6 +365,11 @@ int UnixFs::fs_mkdir(const char* path) {
         return -1;
     }
 
+    if (!check_access(parent_ip, O_WRITE)) {
+        imng_.put(parent_ip);
+        return -1;
+    }
+
     if (dmng_.lookup(parent_ip, basename.c_str()) != INVALID_BLK) {
         imng_.put(parent_ip);
         return -1;
@@ -392,6 +418,12 @@ int UnixFs::fs_rmdir(const char* path) {
     }
 
     if (!dmng_.is_empty(ip)) {
+        imng_.put(ip);
+        imng_.put(parent_ip);
+        return -1;
+    }
+
+    if (!check_access(parent_ip, O_WRITE)) {
         imng_.put(ip);
         imng_.put(parent_ip);
         return -1;
@@ -608,9 +640,10 @@ DiskUsage UnixFs::fs_disk_usage() const {
     return du;
 }
 
-void UnixFs::set_user(uint16_t uid, uint16_t gid) {
+void UnixFs::set_user(uint16_t uid, uint16_t gid, uint16_t slot) {
     cur_uid_ = uid;
     cur_gid_ = gid;
+    user_slot_ = slot;
 }
 
 void UnixFs::set_disk_path(const std::string& path) {
@@ -623,6 +656,28 @@ void UnixFs::sync() {
     }
     sb_.flush();
     dev_.save_to_file(disk_path_.c_str());
+}
+
+bool UnixFs::check_access(MemINode* ip, uint8_t required) {
+    if (cur_uid_ == 0) return true;
+
+    uint16_t mode = ip->di.di_mode;
+    uint16_t r_bit, w_bit;
+
+    if (cur_uid_ == ip->di.di_uid) {
+        r_bit = PERM_UR;
+        w_bit = PERM_UW;
+    } else if (cur_gid_ == ip->di.di_gid) {
+        r_bit = PERM_GR;
+        w_bit = PERM_GW;
+    } else {
+        r_bit = PERM_OR;
+        w_bit = PERM_OW;
+    }
+
+    if ((required & O_READ) && !(mode & r_bit)) return false;
+    if ((required & O_WRITE) && !(mode & w_bit)) return false;
+    return true;
 }
 
 }  // namespace pfs

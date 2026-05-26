@@ -42,16 +42,17 @@ constexpr uint32_t MAX_USER = 8;
 constexpr uint16_t MODE_FILE = 0x0400;
 constexpr uint16_t MODE_DIR = 0x0800;
 
-constexpr uint16_t PERM_UR = 0x0001;
-constexpr uint16_t PERM_UW = 0x0002;
-constexpr uint16_t PERM_UX = 0x0004;
-constexpr uint16_t PERM_GR = 0x0008;
-constexpr uint16_t PERM_GW = 0x0010;
-constexpr uint16_t PERM_GX = 0x0020;
-constexpr uint16_t PERM_OR = 0x0040;
-constexpr uint16_t PERM_OW = 0x0080;
-constexpr uint16_t PERM_OX = 0x0100;
-constexpr uint16_t DEFAULT_MODE = 0x01FF;  // rwxrwxrwx
+// Standard UNIX permission bits (octal layout)
+constexpr uint16_t PERM_OX = 0001;
+constexpr uint16_t PERM_OW = 0002;
+constexpr uint16_t PERM_OR = 0004;
+constexpr uint16_t PERM_GX = 0010;
+constexpr uint16_t PERM_GW = 0020;
+constexpr uint16_t PERM_GR = 0040;
+constexpr uint16_t PERM_UX = 0100;
+constexpr uint16_t PERM_UW = 0200;
+constexpr uint16_t PERM_UR = 0400;
+constexpr uint16_t DEFAULT_MODE = 0777;  // rwxrwxrwx
 
 // Sentinel values
 constexpr uint16_t INVALID_BLK = 0xFFFF;

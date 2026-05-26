@@ -230,3 +230,86 @@ TEST_F(UnixFsTest, Persistence) {
 
     std::remove("/tmp/pfs_test_persist.img");
 }
+
+// --- Access control tests ---
+
+TEST_F(UnixFsTest, AccessDeniedOpenReadOnly) {
+    fs.set_user(1000, 100);
+    fs.fs_create("secret.txt", 0600);
+
+    int fd = fs.fs_open("secret.txt", O_WRITE);
+    ASSERT_GE(fd, 0);
+    fs.fs_write(fd, "data", 4);
+    fs.fs_close(fd);
+
+    // Switch to a different user
+    fs.set_user(2000, 200);
+    EXPECT_EQ(fs.fs_open("secret.txt", O_READ), -1);
+    EXPECT_EQ(fs.fs_open("secret.txt", O_WRITE), -1);
+}
+
+TEST_F(UnixFsTest, AccessAllowedForOwner) {
+    fs.set_user(1000, 100);
+    fs.fs_create("myfile.txt", 0600);
+
+    int fd = fs.fs_open("myfile.txt", O_READ);
+    ASSERT_GE(fd, 0);
+    fs.fs_close(fd);
+
+    fd = fs.fs_open("myfile.txt", O_WRITE);
+    ASSERT_GE(fd, 0);
+    fs.fs_close(fd);
+}
+
+TEST_F(UnixFsTest, RootBypassesPermissions) {
+    fs.set_user(1000, 100);
+    fs.fs_create("locked.txt", 0000);
+
+    fs.set_user(0, 0);
+    int fd = fs.fs_open("locked.txt", O_READ);
+    ASSERT_GE(fd, 0);
+    fs.fs_close(fd);
+}
+
+TEST_F(UnixFsTest, AccessDeniedCreateInDir) {
+    fs.set_user(0, 0);
+    fs.fs_mkdir("restricted");
+    fs.fs_chmod("restricted", 0500);
+
+    fs.set_user(1000, 100);
+    EXPECT_EQ(fs.fs_create("restricted/file.txt", 0644), -1);
+}
+
+TEST_F(UnixFsTest, AccessDeniedDeleteFile) {
+    fs.set_user(0, 0);
+    fs.fs_create("protected.txt", 0644);
+    fs.fs_chmod(".", 0555);
+
+    fs.set_user(1000, 100);
+    EXPECT_EQ(fs.fs_delete("protected.txt"), -1);
+
+    // Restore so TearDown doesn't fail
+    fs.set_user(0, 0);
+    fs.fs_chmod(".", 0777);
+}
+
+TEST_F(UnixFsTest, GroupAccessAllowed) {
+    fs.set_user(1000, 100);
+    fs.fs_create("group.txt", 0060);
+
+    // Same group, different user
+    fs.set_user(2000, 100);
+    int fd = fs.fs_open("group.txt", O_READ);
+    ASSERT_GE(fd, 0);
+    fs.fs_close(fd);
+}
+
+TEST_F(UnixFsTest, OtherAccessAllowed) {
+    fs.set_user(1000, 100);
+    fs.fs_create("public.txt", 0004);
+
+    fs.set_user(3000, 300);
+    int fd = fs.fs_open("public.txt", O_READ);
+    ASSERT_GE(fd, 0);
+    fs.fs_close(fd);
+}
