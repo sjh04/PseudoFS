@@ -41,7 +41,8 @@ public:
     std::string fs_type_name() const override;
     DiskUsage fs_disk_usage() const override;
 
-    void set_user(uint16_t uid, uint16_t gid);
+    // slot: OFT user slot (0..MAX_USER-1), uid/gid: actual UNIX ids for permissions
+    void set_user(uint16_t uid, uint16_t gid, uint16_t slot = 0);
 
     // Set the disk image path for auto-sync. When set, every write
     // operation (create/write/delete/mkdir/rmdir/chmod/link) flushes
@@ -64,6 +65,9 @@ private:
     uint16_t cur_gid_;
     bool mounted_;
     std::string disk_path_;
+    uint16_t user_slot_;
+
+    bool check_access(MemINode* ip, uint8_t required);
 };
 
 }  // namespace pfs
