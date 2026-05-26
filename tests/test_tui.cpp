@@ -28,8 +28,7 @@ TEST(TuiTest, SwitchFsUpdatesPointer) {
     Tui tui(fs, um, reg);
 
     alignas(64) char other_buf[256];
-    IFileSystem& other_fs =
-        *static_cast<IFileSystem*>(static_cast<void*>(other_buf));
+    IFileSystem& other_fs = *static_cast<IFileSystem*>(static_cast<void*>(other_buf));
 
     // Before switch, fs_ should point to original
     // After switch, should point to other

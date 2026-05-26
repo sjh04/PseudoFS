@@ -11,7 +11,7 @@
 using namespace pfs;
 
 class DirectoryTest : public ::testing::Test {
-protected:
+   protected:
     BlockDevice dev{TOTAL_BLK_NUM, BLOCK_SIZE};
     SuperBlock sb{dev};
     InodeManager imng{dev, sb};

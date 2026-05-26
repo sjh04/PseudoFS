@@ -15,27 +15,29 @@ static std::string to_upper(const std::string& s) {
 
 static std::string entry_name(const FAT16DirEntry& e) {
     std::string n;
-    for (int i = 0; i < 8 && e.name[i] != ' ' && e.name[i] != '\0'; ++i)
-        n += e.name[i];
+    for (int i = 0; i < 8 && e.name[i] != ' ' && e.name[i] != '\0'; ++i) n += e.name[i];
     bool has_ext = false;
     for (int i = 0; i < 3; ++i) {
-        if (e.ext[i] != ' ' && e.ext[i] != '\0') { has_ext = true; break; }
+        if (e.ext[i] != ' ' && e.ext[i] != '\0') {
+            has_ext = true;
+            break;
+        }
     }
     if (has_ext) {
         n += '.';
-        for (int i = 0; i < 3 && e.ext[i] != ' ' && e.ext[i] != '\0'; ++i)
-            n += e.ext[i];
+        for (int i = 0; i < 3 && e.ext[i] != ' ' && e.ext[i] != '\0'; ++i) n += e.ext[i];
     }
     return n;
 }
 
 Fat16Fs::Fat16Fs(BlockDevice& dev)
-    : dev_(dev)
-    , cwd_path_("/")
-    , cwd_cluster_(kRootCluster)
-    , cur_uid_(0)
-    , cur_gid_(0)
-    , mounted_(false) {}
+    : dev_(dev),
+      cwd_path_("/"),
+      cwd_cluster_(kRootCluster),
+      cur_uid_(0),
+      cur_gid_(0),
+      mounted_(false) {
+}
 
 void Fat16Fs::set_user(uint16_t uid, uint16_t gid) {
     cur_uid_ = uid;
@@ -116,8 +118,8 @@ int Fat16Fs::fs_create(const char* path, uint16_t /*mode*/) {
     uint16_t parent_cluster, unused;
     std::string name;
     int ret = resolve_path(path, unused, parent_cluster, name);
-    if (ret == 0) return -1;  // already exists
-    if (ret != -2) return -1; // parent not found
+    if (ret == 0) return -1;   // already exists
+    if (ret != -2) return -1;  // parent not found
 
     uint16_t first_cluster = alloc_cluster();
     if (first_cluster == FAT16_END_OF_CHAIN) return -1;
@@ -157,8 +159,7 @@ int Fat16Fs::fs_open(const char* path, int flags) {
     read_dir_entries(parent, entries);
     for (auto& e : entries) {
         if (to_upper(name) == entry_name(e)) {
-            int fd = oft_.alloc_fd(cur_uid_, e.first_cluster,
-                                   static_cast<uint8_t>(flags));
+            int fd = oft_.alloc_fd(cur_uid_, e.first_cluster, static_cast<uint8_t>(flags));
             if (fd >= 0 && (flags & O_APPEND)) {
                 oft_.set_offset(cur_uid_, fd, e.file_size);
             }
@@ -196,18 +197,16 @@ ssize_t Fat16Fs::fs_read(int fd, void* buf, size_t len) {
     uint32_t skip_blocks = offset / BLOCK_SIZE;
 
     // Skip to the right cluster
-    for (uint32_t i = 0; i < skip_blocks && cur_cluster >= 2 &&
-                          cur_cluster != FAT16_END_OF_CHAIN; ++i) {
+    for (uint32_t i = 0; i < skip_blocks && cur_cluster >= 2 && cur_cluster != FAT16_END_OF_CHAIN;
+         ++i) {
         cur_cluster = fat_[cur_cluster];
     }
 
     uint32_t blk_off = offset % BLOCK_SIZE;
 
-    while (bytes_read < to_read && cur_cluster >= 2 &&
-           cur_cluster != FAT16_END_OF_CHAIN) {
+    while (bytes_read < to_read && cur_cluster >= 2 && cur_cluster != FAT16_END_OF_CHAIN) {
         dev_.read_block(cluster_to_block(cur_cluster), blk_buf);
-        uint32_t chunk = std::min(static_cast<size_t>(BLOCK_SIZE - blk_off),
-                                  to_read - bytes_read);
+        uint32_t chunk = std::min(static_cast<size_t>(BLOCK_SIZE - blk_off), to_read - bytes_read);
         std::memcpy(dst + bytes_read, blk_buf + blk_off, chunk);
         bytes_read += chunk;
         blk_off = 0;
@@ -261,8 +260,8 @@ ssize_t Fat16Fs::fs_write(int fd, const void* buf, size_t len) {
             // Read existing block content for partial writes
             dev_.read_block(cluster_to_block(cur_cluster), blk_buf);
 
-            uint32_t chunk = std::min(static_cast<size_t>(BLOCK_SIZE - blk_off),
-                                      len - bytes_written);
+            uint32_t chunk =
+                std::min(static_cast<size_t>(BLOCK_SIZE - blk_off), len - bytes_written);
             std::memcpy(blk_buf + blk_off, src + bytes_written, chunk);
             dev_.write_block(cluster_to_block(cur_cluster), blk_buf);
             bytes_written += chunk;
@@ -448,7 +447,10 @@ int Fat16Fs::fs_chdir(const char* path) {
         std::vector<std::string> parts;
         size_t s = 0;
         while (s < cwd_path_.size()) {
-            if (cwd_path_[s] == '/') { s++; continue; }
+            if (cwd_path_[s] == '/') {
+                s++;
+                continue;
+            }
             size_t e2 = cwd_path_.find('/', s);
             if (e2 == std::string::npos) e2 = cwd_path_.size();
             parts.push_back(cwd_path_.substr(s, e2 - s));
@@ -457,7 +459,10 @@ int Fat16Fs::fs_chdir(const char* path) {
         std::string rel(path);
         s = 0;
         while (s < rel.size()) {
-            if (rel[s] == '/') { s++; continue; }
+            if (rel[s] == '/') {
+                s++;
+                continue;
+            }
             size_t e2 = rel.find('/', s);
             if (e2 == std::string::npos) e2 = rel.size();
             std::string comp = rel.substr(s, e2 - s);
@@ -502,7 +507,9 @@ int Fat16Fs::fs_ls(const char* path, std::vector<DirEntry>& out) {
     return 0;
 }
 
-std::string Fat16Fs::fs_pwd() { return cwd_path_; }
+std::string Fat16Fs::fs_pwd() {
+    return cwd_path_;
+}
 
 // ======================== Metadata ========================
 
@@ -531,11 +538,17 @@ int Fat16Fs::fs_stat(const char* path, FileStat& out) {
     return -1;
 }
 
-int Fat16Fs::fs_chmod(const char* /*path*/, uint16_t /*mode*/) { return 0; }
+int Fat16Fs::fs_chmod(const char* /*path*/, uint16_t /*mode*/) {
+    return 0;
+}
 
-int Fat16Fs::fs_link(const char* /*src*/, const char* /*dst*/) { return -1; }
+int Fat16Fs::fs_link(const char* /*src*/, const char* /*dst*/) {
+    return -1;
+}
 
-std::string Fat16Fs::fs_type_name() const { return "FAT16"; }
+std::string Fat16Fs::fs_type_name() const {
+    return "FAT16";
+}
 
 DiskUsage Fat16Fs::fs_disk_usage() const {
     DiskUsage usage;
@@ -591,8 +604,7 @@ int Fat16Fs::free_cluster_chain(uint16_t start_cluster) {
     return 0;
 }
 
-int Fat16Fs::read_cluster_chain(uint16_t start_cluster,
-                                std::vector<uint8_t>& data,
+int Fat16Fs::read_cluster_chain(uint16_t start_cluster, std::vector<uint8_t>& data,
                                 size_t max_bytes) const {
     data.clear();
     if (start_cluster < 2 || start_cluster >= kClustersPerFat) return -1;
@@ -603,8 +615,7 @@ int Fat16Fs::read_cluster_chain(uint16_t start_cluster,
         std::vector<uint8_t> blk(BLOCK_SIZE);
         dev_.read_block(cluster_to_block(current), blk.data());
         size_t to_add = BLOCK_SIZE;
-        if (data.size() + to_add > max_bytes)
-            to_add = max_bytes - data.size();
+        if (data.size() + to_add > max_bytes) to_add = max_bytes - data.size();
         data.insert(data.end(), blk.begin(), blk.begin() + to_add);
         if (data.size() >= max_bytes) break;
         current = fat_[current];
@@ -613,8 +624,7 @@ int Fat16Fs::read_cluster_chain(uint16_t start_cluster,
     return 0;
 }
 
-int Fat16Fs::write_cluster_chain(uint16_t /*old_first*/,
-                                 const void* data, size_t len,
+int Fat16Fs::write_cluster_chain(uint16_t /*old_first*/, const void* data, size_t len,
                                  uint16_t& out_first_cluster) {
     size_t blocks_needed = (len + BLOCK_SIZE - 1) / BLOCK_SIZE;
     if (blocks_needed == 0) {
@@ -641,16 +651,15 @@ int Fat16Fs::write_cluster_chain(uint16_t /*old_first*/,
     const uint8_t* ptr = static_cast<const uint8_t*>(data);
     for (size_t i = 0; i < blocks_needed; ++i) {
         std::vector<uint8_t> blk(BLOCK_SIZE, 0);
-        size_t chunk = std::min(static_cast<size_t>(BLOCK_SIZE),
-                                len - i * BLOCK_SIZE);
+        size_t chunk = std::min(static_cast<size_t>(BLOCK_SIZE), len - i * BLOCK_SIZE);
         std::memcpy(blk.data(), ptr + i * BLOCK_SIZE, chunk);
         dev_.write_block(cluster_to_block(clusters[i]), blk.data());
     }
     return 0;
 }
 
-int Fat16Fs::resolve_path(const char* path, uint16_t& out_cluster,
-                          uint16_t& out_parent, std::string& out_name) const {
+int Fat16Fs::resolve_path(const char* path, uint16_t& out_cluster, uint16_t& out_parent,
+                          std::string& out_name) const {
     if (path == nullptr || path[0] == '\0') return -1;
 
     uint16_t current_dir = (path[0] == '/') ? kRootCluster : cwd_cluster_;
@@ -715,8 +724,7 @@ int Fat16Fs::resolve_path(const char* path, uint16_t& out_cluster,
     return -2;
 }
 
-int Fat16Fs::read_dir_entries(uint16_t cluster,
-                              std::vector<FAT16DirEntry>& out) const {
+int Fat16Fs::read_dir_entries(uint16_t cluster, std::vector<FAT16DirEntry>& out) const {
     out.clear();
     if (cluster == kRootCluster) {
         std::vector<uint8_t> blk(BLOCK_SIZE);
@@ -774,8 +782,7 @@ int Fat16Fs::remove_dir_entry(uint16_t dir_cluster, const char* name) {
                 cur = fat_[cur];
             }
             if (cur >= 2 && cur != FAT16_END_OF_CHAIN) {
-                dev_.write_block(cluster_to_block(cur),
-                                 data.data() + blk_idx * BLOCK_SIZE);
+                dev_.write_block(cluster_to_block(cur), data.data() + blk_idx * BLOCK_SIZE);
             }
             return 0;
         }
@@ -813,8 +820,7 @@ int Fat16Fs::append_dir_entry(uint16_t dir_cluster, const FAT16DirEntry& entry) 
                 cur = fat_[cur];
             }
             if (cur >= 2) {
-                dev_.write_block(cluster_to_block(cur),
-                                 data.data() + blk_idx * BLOCK_SIZE);
+                dev_.write_block(cluster_to_block(cur), data.data() + blk_idx * BLOCK_SIZE);
             }
             return 0;
         }
@@ -890,17 +896,13 @@ void Fat16Fs::set_dir_entry_name(FAT16DirEntry& e, const char* name) {
     size_t base_len = dot ? static_cast<size_t>(dot - name) : std::strlen(name);
 
     for (size_t i = 0; i < base_len && i < 8; ++i) {
-        e.name[i] = (name[i] >= 'a' && name[i] <= 'z')
-                        ? static_cast<char>(name[i] - 32)
-                        : name[i];
+        e.name[i] = (name[i] >= 'a' && name[i] <= 'z') ? static_cast<char>(name[i] - 32) : name[i];
     }
 
     if (dot && dot[1] != '\0') {
         const char* ext = dot + 1;
         for (size_t i = 0; i < 3 && ext[i] != '\0'; ++i) {
-            e.ext[i] = (ext[i] >= 'a' && ext[i] <= 'z')
-                           ? static_cast<char>(ext[i] - 32)
-                           : ext[i];
+            e.ext[i] = (ext[i] >= 'a' && ext[i] <= 'z') ? static_cast<char>(ext[i] - 32) : ext[i];
         }
     }
 }
@@ -918,11 +920,9 @@ void Fat16Fs::fat16_to_vfs_entry(const FAT16DirEntry& fe, DirEntry& ve) const {
 void Fat16Fs::timestamp(uint16_t& t, uint16_t& d) const {
     std::time_t now = std::time(nullptr);
     std::tm* tm = std::localtime(&now);
-    t = static_cast<uint16_t>(
-        (tm->tm_hour << 11) | (tm->tm_min << 5) | (tm->tm_sec / 2));
-    d = static_cast<uint16_t>(
-        ((tm->tm_year + 1900 - 1980) << 9) | ((tm->tm_mon + 1) << 5) |
-        tm->tm_mday);
+    t = static_cast<uint16_t>((tm->tm_hour << 11) | (tm->tm_min << 5) | (tm->tm_sec / 2));
+    d = static_cast<uint16_t>(((tm->tm_year + 1900 - 1980) << 9) | ((tm->tm_mon + 1) << 5) |
+                              tm->tm_mday);
 }
 
 uint32_t Fat16Fs::count_clusters(uint16_t start) const {
@@ -972,8 +972,7 @@ void Fat16Fs::update_file_size(uint16_t first_cluster, uint32_t new_size) {
             dev_.read_block(kRootDirBlk, blk.data());
             for (uint32_t i = 0; i < kDirEntriesPerBlk; ++i) {
                 auto* e = reinterpret_cast<FAT16DirEntry*>(blk.data() + i * 32);
-                if (e->first_cluster == first_cluster &&
-                    !(e->attr & FAT16_ATTR_DIRECTORY)) {
+                if (e->first_cluster == first_cluster && !(e->attr & FAT16_ATTR_DIRECTORY)) {
                     e->file_size = new_size;
                     dev_.write_block(kRootDirBlk, blk.data());
                     return true;
@@ -986,8 +985,7 @@ void Fat16Fs::update_file_size(uint16_t first_cluster, uint32_t new_size) {
         read_cluster_chain(dir_cluster, data);
         for (size_t i = 0; i < data.size() / 32; ++i) {
             auto* e = reinterpret_cast<FAT16DirEntry*>(data.data() + i * 32);
-            if (e->first_cluster == first_cluster &&
-                !(e->attr & FAT16_ATTR_DIRECTORY)) {
+            if (e->first_cluster == first_cluster && !(e->attr & FAT16_ATTR_DIRECTORY)) {
                 e->file_size = new_size;
                 uint16_t cur = dir_cluster;
                 size_t blk_idx = (i * 32) / BLOCK_SIZE;
@@ -995,8 +993,7 @@ void Fat16Fs::update_file_size(uint16_t first_cluster, uint32_t new_size) {
                     cur = fat_[cur];
                 }
                 if (cur >= 2) {
-                    dev_.write_block(cluster_to_block(cur),
-                                     data.data() + blk_idx * BLOCK_SIZE);
+                    dev_.write_block(cluster_to_block(cur), data.data() + blk_idx * BLOCK_SIZE);
                 }
                 return true;
             }

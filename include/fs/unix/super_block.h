@@ -13,21 +13,21 @@ namespace pfs {
 //   When s_nfree==1, s_free[0] is the link to the next group (0 = end of chain).
 //   Allocation pops from top (s_nfree-1); freeing pushes to top.
 struct DiskSuperBlock {
-    uint16_t s_isize;               // inode block count
-    uint16_t s_fsize;               // data block count
-    uint16_t s_nfree;               // entries in free block stack
-    uint16_t s_free[NICFREE];       // free block stack
-    uint16_t s_ninode;              // entries in free inode stack
-    uint16_t s_inode[NICINOD];      // free inode stack
-    uint16_t s_rinode;              // remembered inode for linear scan
-    uint16_t s_free_total;          // total free data blocks
-    uint16_t s_inode_total;         // total free inodes
-    uint16_t s_root_ino;            // root directory inode number
-    uint8_t s_fmod;                 // modification flag
+    uint16_t s_isize;           // inode block count
+    uint16_t s_fsize;           // data block count
+    uint16_t s_nfree;           // entries in free block stack
+    uint16_t s_free[NICFREE];   // free block stack
+    uint16_t s_ninode;          // entries in free inode stack
+    uint16_t s_inode[NICINOD];  // free inode stack
+    uint16_t s_rinode;          // remembered inode for linear scan
+    uint16_t s_free_total;      // total free data blocks
+    uint16_t s_inode_total;     // total free inodes
+    uint16_t s_root_ino;        // root directory inode number
+    uint8_t s_fmod;             // modification flag
 };
 
 class SuperBlock {
-public:
+   public:
     explicit SuperBlock(BlockDevice& dev);
 
     // Initialize free block chain and free inode stack on a fresh disk.
@@ -63,7 +63,7 @@ public:
     uint16_t root_inode() const;
     void set_root_inode(uint16_t ino);
 
-private:
+   private:
     BlockDevice& dev_;
     DiskSuperBlock sb_;
 };

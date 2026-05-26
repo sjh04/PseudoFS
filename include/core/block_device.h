@@ -5,7 +5,7 @@
 namespace pfs {
 
 class BlockDevice {
-public:
+   public:
     BlockDevice(uint32_t total_blocks, uint32_t block_size = 512);
     ~BlockDevice();
 
@@ -24,7 +24,7 @@ public:
 
     void zero_all();
 
-private:
+   private:
     uint8_t* disk_;
     uint32_t total_blocks_;
     uint32_t block_size_;

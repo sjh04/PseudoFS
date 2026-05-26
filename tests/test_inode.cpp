@@ -10,7 +10,7 @@
 using namespace pfs;
 
 class InodeTest : public ::testing::Test {
-protected:
+   protected:
     BlockDevice dev{TOTAL_BLK_NUM, BLOCK_SIZE};
     SuperBlock sb{dev};
     InodeManager mgr{dev, sb};

@@ -10,8 +10,8 @@ void CommandRegistry::register_cmd(const std::string& name, CmdHandler handler,
     commands_.emplace_back(name, std::move(entry));
 }
 
-int CommandRegistry::execute(const std::string& cmdline, IFileSystem& fs,
-                             UserManager& um, std::string& output) {
+int CommandRegistry::execute(const std::string& cmdline, IFileSystem& fs, UserManager& um,
+                             std::string& output) {
     std::vector<std::string> args = tokenize(cmdline);
     if (args.empty()) {
         return 0;
@@ -30,8 +30,7 @@ int CommandRegistry::execute(const std::string& cmdline, IFileSystem& fs,
     return -1;
 }
 
-std::vector<std::pair<std::string, std::string>>
-CommandRegistry::list_commands() const {
+std::vector<std::pair<std::string, std::string>> CommandRegistry::list_commands() const {
     std::vector<std::pair<std::string, std::string>> result;
     result.reserve(commands_.size());
     for (const auto& [name, entry] : commands_) {

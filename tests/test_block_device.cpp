@@ -8,7 +8,7 @@
 using namespace pfs;
 
 class BlockDeviceTest : public ::testing::Test {
-protected:
+   protected:
     static constexpr uint32_t kBlocks = 64;
     static constexpr uint32_t kBlockSize = 512;
     BlockDevice dev{kBlocks, kBlockSize};

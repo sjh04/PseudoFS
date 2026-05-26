@@ -7,7 +7,7 @@
 using namespace pfs;
 
 class OpenFileTableTest : public ::testing::Test {
-protected:
+   protected:
     OpenFileTable oft;
 };
 

@@ -8,7 +8,7 @@ namespace pfs {
 namespace {
 
 class Fat16Test : public ::testing::Test {
-protected:
+   protected:
     void SetUp() override {
         dev_ = new BlockDevice(TOTAL_BLK_NUM, BLOCK_SIZE);
         fs_ = new Fat16Fs(*dev_);

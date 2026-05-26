@@ -9,7 +9,7 @@ class UserManager;
 class CommandRegistry;
 
 class Tui {
-public:
+   public:
     Tui(IFileSystem& fs, UserManager& um, CommandRegistry& reg);
     ~Tui();
 
@@ -19,7 +19,7 @@ public:
     // Switch the underlying filesystem engine at runtime (F2).
     void switch_fs(IFileSystem& new_fs);
 
-private:
+   private:
     IFileSystem* fs_;
     UserManager* um_;
     CommandRegistry* reg_;

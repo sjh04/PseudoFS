@@ -13,7 +13,7 @@
 namespace pfs {
 
 class UnixFs : public IFileSystem {
-public:
+   public:
     explicit UnixFs(BlockDevice& dev);
 
     int fs_format() override;
@@ -50,7 +50,7 @@ public:
     // Prevents data loss on crash.
     void set_disk_path(const std::string& path);
 
-private:
+   private:
     void sync();
     BlockDevice& dev_;
     SuperBlock sb_;

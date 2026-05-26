@@ -40,7 +40,7 @@ struct DiskUsage {
 };
 
 class IFileSystem {
-public:
+   public:
     virtual ~IFileSystem() = default;
 
     virtual int fs_format() = 0;

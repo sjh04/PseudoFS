@@ -9,10 +9,10 @@ namespace pfs {
 // System-wide open file table entry.
 // Shared across users if they open the same file (ref counted).
 struct SysOpenFileEntry {
-    uint8_t f_flag;         // open mode: O_READ, O_WRITE, O_APPEND
-    uint16_t f_count;       // reference count
-    uint16_t f_inode_no;    // inode number
-    uint32_t f_offset;      // current read/write position
+    uint8_t f_flag;       // open mode: O_READ, O_WRITE, O_APPEND
+    uint16_t f_count;     // reference count
+    uint16_t f_inode_no;  // inode number
+    uint32_t f_offset;    // current read/write position
 };
 
 // Per-user open file table: maps user fd (0..MAX_OPEN_FILE-1)
@@ -23,7 +23,7 @@ struct UserOpenFiles {
 };
 
 class OpenFileTable {
-public:
+   public:
     OpenFileTable();
 
     // Allocate a new fd for a user. Creates a system table entry.
@@ -50,7 +50,7 @@ public:
     // Close all files opened by a user (used by logout).
     void close_all(uint16_t user_id);
 
-private:
+   private:
     SysOpenFileEntry sys_table_[SYS_OPEN_FILE];
     UserOpenFiles user_table_[MAX_USER];
 

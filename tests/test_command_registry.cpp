@@ -86,8 +86,7 @@ TEST(CommandRegistryTest, ListCommandsEmpty) {
 TEST(CommandRegistryTest, RegisterAndList) {
     CommandRegistry reg;
     reg.register_cmd("ls", nullptr, "ls — list directory");
-    reg.register_cmd("mkdir", nullptr,
-                     "mkdir <path> — create directory");
+    reg.register_cmd("mkdir", nullptr, "mkdir <path> — create directory");
 
     auto cmds = reg.list_commands();
     ASSERT_EQ(cmds.size(), 2u);

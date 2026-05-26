@@ -17,7 +17,8 @@ UnixFs::UnixFs(BlockDevice& dev)
       cur_uid_(0),
       cur_gid_(0),
       mounted_(false),
-      user_slot_(0) {}
+      user_slot_(0) {
+}
 
 // ---- Lifecycle ----
 
@@ -465,7 +466,10 @@ int UnixFs::fs_chdir(const char* path) {
         size_t start = 0;
         std::string base = cwd_path_;
         while (start < base.size()) {
-            if (base[start] == '/') { start++; continue; }
+            if (base[start] == '/') {
+                start++;
+                continue;
+            }
             size_t end = base.find('/', start);
             if (end == std::string::npos) end = base.size();
             parts.push_back(base.substr(start, end - start));
@@ -474,7 +478,10 @@ int UnixFs::fs_chdir(const char* path) {
         // Apply relative path components
         start = 0;
         while (start < p.size()) {
-            if (p[start] == '/') { start++; continue; }
+            if (p[start] == '/') {
+                start++;
+                continue;
+            }
             size_t end = p.find('/', start);
             if (end == std::string::npos) end = p.size();
             std::string comp = p.substr(start, end - start);
@@ -497,9 +504,8 @@ int UnixFs::fs_chdir(const char* path) {
 }
 
 int UnixFs::fs_ls(const char* path, std::vector<DirEntry>& out) {
-    uint16_t ino = (path == nullptr || path[0] == '\0')
-                       ? cwd_ino_
-                       : dmng_.namei(path, cwd_ino_, root_ino_);
+    uint16_t ino =
+        (path == nullptr || path[0] == '\0') ? cwd_ino_ : dmng_.namei(path, cwd_ino_, root_ino_);
     if (ino == INVALID_BLK) {
         return -1;
     }

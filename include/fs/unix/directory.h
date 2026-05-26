@@ -21,7 +21,7 @@ struct DiskDirEntry {
 static_assert(sizeof(DiskDirEntry) == DIR_ENTRY_SIZE, "DiskDirEntry must be 16 bytes");
 
 class DirectoryManager {
-public:
+   public:
     DirectoryManager(BlockDevice& dev, InodeManager& imng);
 
     // Resolve a path (absolute or relative to cwd) to an inode number.
@@ -58,7 +58,7 @@ public:
     // Check if a directory is empty (only has "." and "..").
     bool is_empty(MemINode* dir_ip);
 
-private:
+   private:
     BlockDevice& dev_;
     InodeManager& imng_;
 

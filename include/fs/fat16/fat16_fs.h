@@ -24,35 +24,35 @@ constexpr uint8_t FAT16_ATTR_ARCHIVE = 0x20;
 // Minimal boot sector stored in block 0
 struct FAT16BootSector {
     char volume_label[11];
-    uint16_t bytes_per_sector;      // 512
-    uint8_t sectors_per_cluster;    // 1
-    uint16_t reserved_sectors;      // 1
-    uint8_t num_fats;               // 2
-    uint16_t root_entry_count;      // 16
-    uint16_t total_sectors;         // 546
-    uint16_t fat_size_sectors;      // 4
-    uint8_t _pad[489];              // pad to 512 bytes
+    uint16_t bytes_per_sector;    // 512
+    uint8_t sectors_per_cluster;  // 1
+    uint16_t reserved_sectors;    // 1
+    uint8_t num_fats;             // 2
+    uint16_t root_entry_count;    // 16
+    uint16_t total_sectors;       // 546
+    uint16_t fat_size_sectors;    // 4
+    uint8_t _pad[489];            // pad to 512 bytes
 };
 
 static_assert(sizeof(FAT16BootSector) == 512, "BootSector must be 512 bytes");
 
 // Directory entry (32 bytes, DOS-compatible)
 struct FAT16DirEntry {
-    char name[8];             // filename, space-padded
-    char ext[3];              // extension
-    uint8_t attr;             // attributes
+    char name[8];  // filename, space-padded
+    char ext[3];   // extension
+    uint8_t attr;  // attributes
     uint8_t reserved[10];
-    uint16_t time;            // modified time
-    uint16_t date;            // modified date
-    uint16_t first_cluster;   // starting cluster
-    uint32_t file_size;       // file size in bytes
+    uint16_t time;           // modified time
+    uint16_t date;           // modified date
+    uint16_t first_cluster;  // starting cluster
+    uint32_t file_size;      // file size in bytes
 };
 
 static_assert(sizeof(FAT16DirEntry) == 32, "DirEntry must be 32 bytes");
 #pragma pack(pop)
 
 class Fat16Fs : public IFileSystem {
-public:
+   public:
     explicit Fat16Fs(BlockDevice& dev);
 
     int fs_format() override;
@@ -83,22 +83,20 @@ public:
     void set_user(uint16_t uid, uint16_t gid);
     void set_disk_path(const std::string& path);
 
-private:
+   private:
     void sync();
     // --- FAT16 disk layout constants ---
     static constexpr uint32_t kBootBlk = 0;
     static constexpr uint32_t kFat1Start = 1;
-    static constexpr uint32_t kFatSize = 4;         // blocks per FAT
+    static constexpr uint32_t kFatSize = 4;  // blocks per FAT
     static constexpr uint32_t kFat2Start = 5;
     static constexpr uint32_t kRootDirBlk = 9;
     static constexpr uint32_t kDataStart = 10;
-    static constexpr uint32_t kEntriesPerFatBlk = BLOCK_SIZE / 2;  // 256
-    static constexpr uint32_t kDirEntriesPerBlk = BLOCK_SIZE / 32; // 16
-    static constexpr uint32_t kClustersPerFat =
-        kFatSize * kEntriesPerFatBlk;  // 1024
-    static constexpr uint32_t kDataBlkCount =
-        TOTAL_BLK_NUM - kDataStart;  // 536
-    static constexpr uint16_t kRootCluster = 0;  // Sentinel for root
+    static constexpr uint32_t kEntriesPerFatBlk = BLOCK_SIZE / 2;              // 256
+    static constexpr uint32_t kDirEntriesPerBlk = BLOCK_SIZE / 32;             // 16
+    static constexpr uint32_t kClustersPerFat = kFatSize * kEntriesPerFatBlk;  // 1024
+    static constexpr uint32_t kDataBlkCount = TOTAL_BLK_NUM - kDataStart;      // 536
+    static constexpr uint16_t kRootCluster = 0;                                // Sentinel for root
 
     BlockDevice& dev_;
     OpenFileTable oft_;
@@ -119,18 +117,14 @@ private:
     int free_cluster_chain(uint16_t start_cluster);
     int read_cluster_chain(uint16_t start_cluster, std::vector<uint8_t>& data,
                            size_t max_bytes = ~0u) const;
-    int write_cluster_chain(uint16_t start_cluster,
-                            const void* data, size_t len,
+    int write_cluster_chain(uint16_t start_cluster, const void* data, size_t len,
                             uint16_t& out_first_cluster);
-    int resolve_path(const char* path, uint16_t& out_cluster,
-                     uint16_t& out_parent, std::string& out_name) const;
-    int read_dir_entries(uint16_t cluster,
-                         std::vector<FAT16DirEntry>& out) const;
-    int write_dir_entry(uint16_t dir_cluster,
-                        const FAT16DirEntry& entry);
+    int resolve_path(const char* path, uint16_t& out_cluster, uint16_t& out_parent,
+                     std::string& out_name) const;
+    int read_dir_entries(uint16_t cluster, std::vector<FAT16DirEntry>& out) const;
+    int write_dir_entry(uint16_t dir_cluster, const FAT16DirEntry& entry);
     int remove_dir_entry(uint16_t dir_cluster, const char* name);
-    int append_dir_entry(uint16_t dir_cluster,
-                         const FAT16DirEntry& entry);
+    int append_dir_entry(uint16_t dir_cluster, const FAT16DirEntry& entry);
     uint16_t find_free_cluster() const;
     void init_fat_from_disk();
     void flush_fat();

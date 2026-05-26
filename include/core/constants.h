@@ -17,7 +17,7 @@ constexpr uint32_t TOTAL_BLK_NUM = DATA_START_BLK + DATA_BLK_NUM;  // 546
 
 // INode
 constexpr uint32_t INODE_SIZE = 64;
-constexpr uint32_t INODES_PER_BLK = BLOCK_SIZE / INODE_SIZE;  // 8
+constexpr uint32_t INODES_PER_BLK = BLOCK_SIZE / INODE_SIZE;      // 8
 constexpr uint32_t INODE_TOTAL = INODE_BLK_NUM * INODES_PER_BLK;  // 256
 constexpr uint32_t NADDR = 10;
 constexpr uint32_t DIRECT_ADDR = 6;
@@ -29,7 +29,7 @@ constexpr uint32_t NICINOD = 50;
 
 // Directory
 constexpr uint32_t MAX_FILENAME = 14;
-constexpr uint32_t DIR_ENTRY_SIZE = MAX_FILENAME + 2;  // 16
+constexpr uint32_t DIR_ENTRY_SIZE = MAX_FILENAME + 2;                  // 16
 constexpr uint32_t DIR_ENTRIES_PER_BLK = BLOCK_SIZE / DIR_ENTRY_SIZE;  // 32
 constexpr uint32_t DIRNUM = 128;
 

@@ -6,8 +6,8 @@
 
 namespace pfs {
 
-DirectoryManager::DirectoryManager(BlockDevice& dev, InodeManager& imng)
-    : dev_(dev), imng_(imng) {}
+DirectoryManager::DirectoryManager(BlockDevice& dev, InodeManager& imng) : dev_(dev), imng_(imng) {
+}
 
 // ---- Path helpers ----
 
@@ -172,8 +172,7 @@ bool DirectoryManager::is_empty(MemINode* dir_ip) {
         return false;
     }
     for (auto& e : entries) {
-        if (e.d_ino != 0 &&
-            std::strncmp(e.d_name, ".", MAX_FILENAME) != 0 &&
+        if (e.d_ino != 0 && std::strncmp(e.d_name, ".", MAX_FILENAME) != 0 &&
             std::strncmp(e.d_name, "..", MAX_FILENAME) != 0) {
             return false;
         }
@@ -207,7 +206,7 @@ uint16_t DirectoryManager::namei(const char* path, uint16_t cwd_ino, uint16_t ro
 }
 
 uint16_t DirectoryManager::namei_parent(const char* path, uint16_t cwd_ino, uint16_t root_ino,
-                                         std::string& basename) {
+                                        std::string& basename) {
     auto parts = split_path(path);
     if (parts.empty()) {
         return INVALID_BLK;
