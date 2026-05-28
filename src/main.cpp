@@ -10,6 +10,7 @@
 #include "fs/unix/unix_fs.h"
 #include "core/user_manager.h"
 #include "shell/command_registry.h"
+#include "tui/tui.h"
 
 using namespace pfs;
 
@@ -478,14 +479,63 @@ static void register_commands(CommandRegistry& reg) {
 }
 
 int main(int argc, char* argv[]) {
+    bool use_tui = false;
     bool use_fat16 = false;
     bool force_format = false;
 
     for (int i = 1; i < argc; i++) {
+        if (std::strcmp(argv[i], "--tui") == 0) use_tui = true;
         if (std::strcmp(argv[i], "--fat16") == 0) use_fat16 = true;
         if (std::strcmp(argv[i], "--format") == 0) force_format = true;
     }
 
+    CommandRegistry reg;
+    register_commands(reg);
+    UserManager um;
+
+    if (use_tui) {
+        // --- TUI mode: separate disks for each FS ---
+        BlockDevice dev(TOTAL_BLK_NUM, BLOCK_SIZE);
+        UnixFs unix_fs(dev);
+        Fat16Fs fat16_fs(dev);
+        unix_fs.set_disk_path("pfs_tui_unix.img");
+        fat16_fs.set_disk_path("pfs_tui_fat16.img");
+
+        IFileSystem* primary =
+            use_fat16 ? static_cast<IFileSystem*>(&fat16_fs)
+                      : static_cast<IFileSystem*>(&unix_fs);
+        IFileSystem* alt =
+            use_fat16 ? static_cast<IFileSystem*>(&unix_fs)
+                      : static_cast<IFileSystem*>(&fat16_fs);
+
+        // Mount or format primary
+        if (!force_format && dev.load_from_file(
+                use_fat16 ? "pfs_tui_fat16.img" : "pfs_tui_unix.img") == 0) {
+            if (primary->fs_mount() != 0) primary->fs_format();
+        } else {
+            primary->fs_format();
+        }
+        // Mount alt if its image exists, else format
+        if (dev.load_from_file(
+                use_fat16 ? "pfs_tui_unix.img" : "pfs_tui_fat16.img") == 0) {
+            alt->fs_mount();
+        } else {
+            alt->fs_format();
+        }
+        // Restore primary
+        primary->fs_mount();
+
+        Tui tui(*primary, *alt, um, reg);
+        tui.run();
+
+        primary->fs_unmount();
+        dev.save_to_file("pfs_tui_unix.img");
+        dev.save_to_file("pfs_tui_fat16.img");
+        std::printf("Disks saved. Goodbye.\n");
+        return 0;
+    }
+
+    // --- CLI mode ---
     const char* disk_path = use_fat16 ? FAT16_DISK : UNIX_DISK;
 
     BlockDevice dev(TOTAL_BLK_NUM, BLOCK_SIZE);
@@ -506,11 +556,6 @@ int main(int argc, char* argv[]) {
     } else {
         fs->fs_format();
     }
-
-    CommandRegistry reg;
-    register_commands(reg);
-
-    UserManager um;
 
     std::printf("PseudoFS v2.0 [%s] — type 'help' for commands, 'exit' to quit\n",
                 fs->fs_type_name().c_str());
