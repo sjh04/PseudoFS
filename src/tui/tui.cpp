@@ -380,6 +380,47 @@ void Tui::run() {
             refresh();
             break;
         }
+        case '\t': {  // Tab — filename completion
+            // Find the last word (after last space)
+            size_t last_space = input_buf.rfind(' ');
+            std::string prefix =
+                (last_space == std::string::npos)
+                    ? input_buf
+                    : input_buf.substr(last_space + 1);
+            if (prefix.empty()) break;
+
+            // Get current directory listing
+            std::vector<DirEntry> entries;
+            if (fs_->fs_ls("", entries) == 0) {
+                std::vector<std::string> matches;
+                for (auto& e : entries) {
+                    std::string name(e.name);
+                    if (name.size() >= prefix.size() &&
+                        name.compare(0, prefix.size(), prefix) == 0) {
+                        matches.push_back(name);
+                    }
+                }
+                if (matches.size() == 1) {
+                    // Single match: complete
+                    std::string suffix = matches[0].substr(prefix.size());
+                    input_buf += suffix;
+                    wprintw(w.term_win, "%s", suffix.c_str());
+                    wrefresh(w.term_win);
+                } else if (matches.size() > 1) {
+                    // Multiple: show options
+                    wprintw(w.term_win,
+                            "\n");
+                    for (auto& m : matches) {
+                        wprintw(w.term_win, "  %s", m.c_str());
+                    }
+                    wprintw(w.term_win, "\n");
+                    draw_prompt(w);
+                    wprintw(w.term_win, "%s", input_buf.c_str());
+                    wrefresh(w.term_win);
+                }
+            }
+            break;
+        }
         default:
             if (ch >= 32 && ch < 127) {
                 input_buf.push_back(static_cast<char>(ch));

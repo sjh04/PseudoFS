@@ -786,6 +786,21 @@ int main(int argc, char* argv[]) {
     std::printf("PseudoFS v2.0 [%s] — type 'help' for commands, 'exit' to quit\n",
                 fs->fs_type_name().c_str());
 
+    std::vector<std::string> history;
+    // Register history command after history vector exists
+    reg.register_cmd(
+        "history",
+        [&history](IFileSystem&, UserManager&, const std::vector<std::string>&,
+                   std::string& out) -> int {
+            out.clear();
+            for (size_t i = 0; i < history.size(); ++i) {
+                out += std::to_string(i + 1) + "  " + history[i] + "\n";
+            }
+            if (out.empty()) out = "(no history)";
+            return 0;
+        },
+        "history — show command history");
+
     char input[1024];
     while (true) {
         std::printf("\033[32m%s\033[0m$ ", fs->fs_pwd().c_str());
@@ -795,6 +810,8 @@ int main(int argc, char* argv[]) {
         size_t len = std::strlen(input);
         if (len > 0 && input[len - 1] == '\n') input[len - 1] = '\0';
         if (input[0] == '\0') continue;
+
+        history.push_back(input);
 
         std::string output;
         int ret = reg.execute(input, *fs, um, output);
