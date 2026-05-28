@@ -26,3 +26,5 @@ CLAUDE.local.md
 # OS
 .DS_Store
 Thumbs.db
+
+.codegraph/
