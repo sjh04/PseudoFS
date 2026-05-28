@@ -207,6 +207,42 @@ static void register_commands(CommandRegistry& reg) {
         "more <file> — view file content");
 
     reg.register_cmd(
+        "find",
+        [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
+           std::string& out) -> int {
+            if (args.size() < 2) {
+                out = "Usage: find <path> <name>";
+                return -1;
+            }
+            const char* start = args[0].c_str();
+            const std::string& pattern = args[1];
+            out.clear();
+            // Recursive search
+            std::function<void(const std::string&)> search =
+                [&](const std::string& dir) {
+                    std::vector<DirEntry> entries;
+                    if (fs.fs_ls(dir.c_str(), entries) != 0) return;
+                    for (auto& e : entries) {
+                        if (std::strcmp(e.name, ".") == 0 ||
+                            std::strcmp(e.name, "..") == 0)
+                            continue;
+                        std::string full =
+                            (dir == "/") ? "/" + std::string(e.name)
+                                         : dir + "/" + std::string(e.name);
+                        if (std::string(e.name).find(pattern) !=
+                            std::string::npos) {
+                            out += full + "\n";
+                        }
+                        if (e.type == TYPE_DIR) search(full);
+                    }
+                };
+            search(start);
+            if (out.empty()) out = "(no matches)";
+            return 0;
+        },
+        "find <path> <name> — search files by name");
+
+    reg.register_cmd(
         "rmdir",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string& out) -> int {
@@ -222,14 +258,17 @@ static void register_commands(CommandRegistry& reg) {
 
     reg.register_cmd(
         "cd",
-        [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
+        [](IFileSystem& fs, UserManager& um, const std::vector<std::string>& args,
            std::string& out) -> int {
-            const char* path = args.empty() ? "/" : args[0].c_str();
-            int ret = fs.fs_chdir(path);
+            std::string path = args.empty() ? "/" : args[0];
+            if (!path.empty() && path[0] == '~') {
+                path = "/home/" + um.current_username() + path.substr(1);
+            }
+            int ret = fs.fs_chdir(path.c_str());
             if (ret != 0) out = "cd: no such directory";
             return ret;
         },
-        "cd [path] — change directory");
+        "cd [path] — change directory (~ = home)");
 
     reg.register_cmd(
         "pwd",

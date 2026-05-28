@@ -117,6 +117,23 @@ void register_all(CommandRegistry& reg) {
             fs.fs_close(fd); if(n<0)return -1;
             out.assign(b.data(),n); return 0;
         }, "");
+    reg.register_cmd("find",
+        [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
+           std::string& out) -> int {
+            if(args.size()<2)return -1;
+            std::string pat=args[1]; out.clear();
+            std::function<void(const std::string&)> s=[&](const std::string& d){
+                std::vector<DirEntry> es;
+                if(fs.fs_ls(d.c_str(),es)!=0)return;
+                for(auto& e:es){
+                    if(std::strcmp(e.name,".")==0||std::strcmp(e.name,"..")==0)continue;
+                    std::string f=(d=="/")?"/"+std::string(e.name):d+"/"+e.name;
+                    if(std::string(e.name).find(pat)!=std::string::npos)out+=f+"\n";
+                    if(e.type==TYPE_DIR)s(f);
+                }
+            };
+            s(args[0]); if(out.empty())out="(no matches)"; return 0;
+        }, "");
     reg.register_cmd("rmdir",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string&) -> int {
@@ -124,9 +141,12 @@ void register_all(CommandRegistry& reg) {
             return fs.fs_rmdir(args[0].c_str());
         }, "");
     reg.register_cmd("cd",
-        [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
+        [](IFileSystem& fs, UserManager& um, const std::vector<std::string>& args,
            std::string&) -> int {
-            return fs.fs_chdir(args.empty() ? "/" : args[0].c_str());
+            std::string p = args.empty() ? "/" : args[0];
+            if (!p.empty() && p[0] == '~')
+                p = "/home/" + um.current_username() + p.substr(1);
+            return fs.fs_chdir(p.c_str());
         }, "");
     reg.register_cmd("pwd",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>&,
@@ -739,6 +759,57 @@ TEST_F(E2ETest, MoreDisplaysContent) {
 TEST_F(E2ETest, MoreNonExistent) {
     h.unix_fs.fs_format();
     EXPECT_EQ(h.exec_unix("more /ghost.txt"), -1);
+}
+
+// --- find ---
+
+TEST_F(E2ETest, FindMatchesFiles) {
+    h.unix_fs.fs_format();
+    h.exec_unix("touch /alpha.txt");
+    h.exec_unix("touch /beta.txt");
+    h.exec_unix("mkdir /sub");
+    h.exec_unix("touch /sub/alphab.txt");
+    EXPECT_EQ(h.exec_unix("find / alpha"), 0);
+    EXPECT_NE(h.output.find("alpha.txt"), std::string::npos);
+    EXPECT_NE(h.output.find("alphab.txt"), std::string::npos);
+    EXPECT_EQ(h.output.find("beta.txt"), std::string::npos);
+}
+
+TEST_F(E2ETest, FindNoMatches) {
+    h.unix_fs.fs_format();
+    EXPECT_EQ(h.exec_unix("find / zzz_nonexistent"), 0);
+    EXPECT_EQ(h.output, "(no matches)");
+}
+
+TEST_F(E2ETest, FindInSubdirectory) {
+    h.unix_fs.fs_format();
+    h.exec_unix("mkdir -p /a/b");
+    h.exec_unix("touch /a/b/target.txt");
+    EXPECT_EQ(h.exec_unix("find /a target"), 0);
+    EXPECT_NE(h.output.find("target.txt"), std::string::npos);
+}
+
+// --- cd ~ ---
+
+TEST_F(E2ETest, CdTilde) {
+    h.unix_fs.fs_format();
+    h.exec_unix("login root root");
+    h.exec_unix("useradd dave dpw 5 5");
+    h.exec_unix("logout");
+    h.exec_unix("login dave dpw");
+    EXPECT_EQ(h.exec_unix("cd ~"), 0);
+    EXPECT_EQ(h.unix_fs.fs_pwd(), "/home/dave");
+}
+
+TEST_F(E2ETest, CdTildeSubdir) {
+    h.unix_fs.fs_format();
+    h.exec_unix("login root root");
+    h.exec_unix("useradd eve epw 6 6");
+    h.exec_unix("logout");
+    h.exec_unix("login eve epw");
+    h.exec_unix("mkdir -p /home/eve/docs");
+    EXPECT_EQ(h.exec_unix("cd ~/docs"), 0);
+    EXPECT_EQ(h.unix_fs.fs_pwd(), "/home/eve/docs");
 }
 
 }  // namespace
