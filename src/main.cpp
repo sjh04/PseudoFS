@@ -8,6 +8,7 @@
 #include "core/vfs.h"
 #include "fs/fat16/fat16_fs.h"
 #include "fs/unix/unix_fs.h"
+#include "core/user_manager.h"
 #include "shell/command_registry.h"
 
 using namespace pfs;
@@ -16,6 +17,82 @@ static const char* UNIX_DISK = "pfs_unix.img";
 static const char* FAT16_DISK = "pfs_fat16.img";
 
 static void register_commands(CommandRegistry& reg) {
+    reg.register_cmd(
+        "login",
+        [](IFileSystem&, UserManager& um, const std::vector<std::string>& args,
+           std::string& out) -> int {
+            if (args.size() < 2) {
+                out = "Usage: login <username> <password>";
+                return -1;
+            }
+            int uid = um.login(args[0].c_str(), args[1].c_str());
+            if (uid < 0) {
+                out = "Login failed.";
+                return -1;
+            }
+            out = "Welcome, " + um.current_username() +
+                  " (uid=" + std::to_string(uid) + ")";
+            return 0;
+        },
+        "login <user> <pw> — log in");
+
+    reg.register_cmd(
+        "logout",
+        [](IFileSystem&, UserManager& um, const std::vector<std::string>&,
+           std::string& out) -> int {
+            if (!um.is_logged_in()) {
+                out = "Not logged in.";
+                return -1;
+            }
+            um.logout();
+            out = "Logged out.";
+            return 0;
+        },
+        "logout — log out");
+
+    reg.register_cmd(
+        "useradd",
+        [](IFileSystem& fs, UserManager& um, const std::vector<std::string>& args,
+           std::string& out) -> int {
+            if (args.size() < 4) {
+                out = "Usage: useradd <username> <password> <uid> <gid>";
+                return -1;
+            }
+            uint16_t uid = static_cast<uint16_t>(std::stoi(args[2]));
+            uint16_t gid = static_cast<uint16_t>(std::stoi(args[3]));
+            int ret = um.add_user(args[0].c_str(), args[1].c_str(), uid, gid);
+            if (ret != 0) {
+                out = "useradd: failed (need root, unique name, and free slot)";
+                return -1;
+            }
+            // Create home directory for the new user
+            std::string home = "/home/" + std::string(args[0]);
+            fs.fs_mkdir("/home");
+            fs.fs_mkdir(home.c_str());
+            out = "User " + std::string(args[0]) + " created.";
+            return 0;
+        },
+        "useradd <user> <pw> <uid> <gid> — create user (root only)");
+
+    reg.register_cmd(
+        "passwd",
+        [](IFileSystem&, UserManager& um, const std::vector<std::string>& args,
+           std::string& out) -> int {
+            if (args.size() < 2) {
+                out = "Usage: passwd <old-password> <new-password>";
+                return -1;
+            }
+            int ret =
+                um.change_password(um.current_uid(), args[0].c_str(), args[1].c_str());
+            if (ret != 0) {
+                out = "passwd: failed (check old password)";
+                return -1;
+            }
+            out = "Password changed.";
+            return 0;
+        },
+        "passwd <old> <new> — change password");
+
     reg.register_cmd(
         "format",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>&,
@@ -433,6 +510,8 @@ int main(int argc, char* argv[]) {
     CommandRegistry reg;
     register_commands(reg);
 
+    UserManager um;
+
     std::printf("PseudoFS v2.0 [%s] — type 'help' for commands, 'exit' to quit\n",
                 fs->fs_type_name().c_str());
 
@@ -447,8 +526,6 @@ int main(int argc, char* argv[]) {
         if (input[0] == '\0') continue;
 
         std::string output;
-        alignas(64) char um_buf[128];
-        UserManager& um = *reinterpret_cast<UserManager*>(um_buf);
         int ret = reg.execute(input, *fs, um, output);
 
         if (output == "__EXIT__") break;
