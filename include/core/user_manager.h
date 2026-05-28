@@ -50,8 +50,12 @@ public:
     std::string current_username() const;
     bool is_logged_in() const;
 
+    // Switch user. Root can su without password; others need target's pw.
+    int su(uint16_t uid, const char* password);
+
     // Lookup
     const UserRecord* find_user(uint16_t uid) const;
+    const UserRecord* find_user(const char* username) const;
 
 private:
     UserRecord users_[MAX_USER];

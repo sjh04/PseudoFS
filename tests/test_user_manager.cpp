@@ -13,7 +13,7 @@ protected:
 // --- Initial state ---
 
 TEST_F(UserManagerTest, RootUserExists) {
-    auto* r = um.find_user(0);
+    auto* r = um.find_user(uint16_t(0));
     ASSERT_NE(r, nullptr);
     EXPECT_STREQ(r->username, "root");
     EXPECT_EQ(r->uid, 0);
@@ -205,6 +205,63 @@ TEST_F(UserManagerTest, OtherDenied) {
 TEST_F(UserManagerTest, NoAccessZeroMode) {
     EXPECT_FALSE(um.check_access(1, 1, 99, 0000, ACCESS_READ));
     EXPECT_FALSE(um.check_access(2, 1, 10, 0000, ACCESS_READ));
+}
+
+// --- su ---
+
+TEST_F(UserManagerTest, SuByRoot) {
+    um.login("root", "root");
+    um.add_user("alice", "pw", 1, 1);
+    EXPECT_EQ(um.su(1, nullptr), 0);  // root needs no password
+    EXPECT_EQ(um.current_uid(), 1);
+    EXPECT_EQ(um.current_username(), "alice");
+}
+
+TEST_F(UserManagerTest, SuByNonRootWithPassword) {
+    um.login("root", "root");
+    um.add_user("alice", "alicepw", 1, 1);
+    um.add_user("bob", "bobpw", 2, 2);
+    um.logout();
+    um.login("alice", "alicepw");
+    EXPECT_EQ(um.su(2, "bobpw"), 0);
+    EXPECT_EQ(um.current_uid(), 2);
+}
+
+TEST_F(UserManagerTest, SuByNonRootWrongPassword) {
+    um.login("root", "root");
+    um.add_user("alice", "apw", 1, 1);
+    um.add_user("bob", "bpw", 2, 2);
+    um.logout();
+    um.login("alice", "apw");
+    EXPECT_EQ(um.su(2, "wrong"), -1);
+    EXPECT_EQ(um.current_uid(), 1);  // still alice
+}
+
+TEST_F(UserManagerTest, SuByNonRootNoPassword) {
+    um.login("root", "root");
+    um.add_user("alice", "apw", 1, 1);
+    um.add_user("bob", "bpw", 2, 2);
+    um.logout();
+    um.login("alice", "apw");
+    EXPECT_EQ(um.su(2, nullptr), -1);  // non-root needs password
+}
+
+TEST_F(UserManagerTest, SuInvalidUser) {
+    um.login("root", "root");
+    EXPECT_EQ(um.su(99, nullptr), -1);
+}
+
+TEST_F(UserManagerTest, SuNotLoggedIn) {
+    EXPECT_EQ(um.su(0, nullptr), -1);
+}
+
+TEST_F(UserManagerTest, FindUserByName) {
+    um.login("root", "root");
+    um.add_user("charlie", "p", 3, 3);
+    auto* u = um.find_user("charlie");
+    ASSERT_NE(u, nullptr);
+    EXPECT_EQ(u->uid, 3);
+    EXPECT_EQ(um.find_user("nobody"), nullptr);
 }
 
 }  // namespace

@@ -85,8 +85,37 @@ void register_all(CommandRegistry& reg) {
     reg.register_cmd("mkdir",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string&) -> int {
-            if (args.empty()) return -1;
-            return fs.fs_mkdir(args[0].c_str());
+            bool p=false; std::string path;
+            for(auto& a:args){if(a=="-p")p=true;else path=a;}
+            if(path.empty())return -1;
+            if(!p)return fs.fs_mkdir(path.c_str());
+            std::string cur; size_t pos=0;
+            if(path[0]=='/'){cur="/";pos=1;}
+            while(pos<path.size()){
+                size_t s=path.find('/',pos);
+                if(s==std::string::npos)s=path.size();
+                if(s>pos){cur+=path.substr(pos,s-pos);fs.fs_mkdir(cur.c_str());cur+="/";}
+                pos=s+1;
+            }
+            FileStat st; return fs.fs_stat(path.c_str(),st)==0?0:-1;
+        }, "");
+    reg.register_cmd("su",
+        [](IFileSystem&, UserManager& um, const std::vector<std::string>& args,
+           std::string&) -> int {
+            if(args.empty())return -1;
+            const UserRecord* u=um.find_user(args[0].c_str());
+            if(!u){u=um.find_user(static_cast<uint16_t>(std::stoi(args[0])));}
+            if(!u)return -1;
+            return um.su(u->uid,args.size()>1?args[1].c_str():nullptr);
+        }, "");
+    reg.register_cmd("more",
+        [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
+           std::string& out) -> int {
+            if(args.empty())return -1;
+            int fd=fs.fs_open(args[0].c_str(),O_READ); if(fd<0)return -1;
+            std::vector<char> b(65536,0); ssize_t n=fs.fs_read(fd,b.data(),b.size()-1);
+            fs.fs_close(fd); if(n<0)return -1;
+            out.assign(b.data(),n); return 0;
         }, "");
     reg.register_cmd("rmdir",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
@@ -632,6 +661,84 @@ TEST_F(E2ETest, OpenWriteReadCloseCycle) {
         h.exec_unix("close " + fd);
         h.exec_unix("rm /cycle.txt");
     }
+}
+
+// --- mkdir -p ---
+
+TEST_F(E2ETest, MkdirP) {
+    h.unix_fs.fs_format();
+    EXPECT_EQ(h.exec_unix("mkdir -p /a/b/c"), 0);
+    EXPECT_EQ(h.exec_unix("stat /a/b/c"), 0);
+}
+
+TEST_F(E2ETest, MkdirPExistingParents) {
+    h.unix_fs.fs_format();
+    h.exec_unix("mkdir /a");
+    EXPECT_EQ(h.exec_unix("mkdir -p /a/b/c"), 0);
+}
+
+TEST_F(E2ETest, MkdirPNoFlagFails) {
+    h.unix_fs.fs_format();
+    EXPECT_EQ(h.exec_unix("mkdir /x/y/z"), -1);
+}
+
+// --- su ---
+
+TEST_F(E2ETest, SuByRoot) {
+    h.unix_fs.fs_format();
+    h.exec_unix("login root root");
+    h.exec_unix("useradd alice pw 1 1");
+    EXPECT_EQ(h.exec_unix("su 1"), 0);
+    EXPECT_EQ(h.um.current_username(), "alice");
+}
+
+TEST_F(E2ETest, SuByNonRootWithPassword) {
+    h.unix_fs.fs_format();
+    h.exec_unix("login root root");
+    h.exec_unix("useradd alice apw 1 1");
+    h.exec_unix("useradd bob bpw 2 2");
+    h.exec_unix("logout");
+    h.exec_unix("login alice apw");
+    EXPECT_EQ(h.exec_unix("su 2 bpw"), 0);
+    EXPECT_EQ(h.um.current_username(), "bob");
+}
+
+TEST_F(E2ETest, SuByNonRootWrongPassword) {
+    h.unix_fs.fs_format();
+    h.exec_unix("login root root");
+    h.exec_unix("useradd alice apw 1 1");
+    h.exec_unix("useradd bob bpw 2 2");
+    h.exec_unix("logout");
+    h.exec_unix("login alice apw");
+    EXPECT_EQ(h.exec_unix("su 2 wrong"), -1);
+    EXPECT_EQ(h.um.current_username(), "alice");
+}
+
+TEST_F(E2ETest, SuByName) {
+    h.unix_fs.fs_format();
+    h.exec_unix("login root root");
+    h.exec_unix("useradd carol cpw 3 3");
+    EXPECT_EQ(h.exec_unix("su carol"), 0);
+    EXPECT_EQ(h.um.current_username(), "carol");
+}
+
+// --- more ---
+
+TEST_F(E2ETest, MoreDisplaysContent) {
+    h.unix_fs.fs_format();
+    h.exec_unix("touch /readme.txt");
+    ASSERT_EQ(h.exec_unix("open /readme.txt w"), 0);
+    std::string fd = h.output;
+    h.exec_unix("write " + fd + " line1\nline2\nline3");
+    h.exec_unix("close " + fd);
+    EXPECT_EQ(h.exec_unix("more /readme.txt"), 0);
+    EXPECT_NE(h.output.find("line1"), std::string::npos);
+    EXPECT_NE(h.output.find("line3"), std::string::npos);
+}
+
+TEST_F(E2ETest, MoreNonExistent) {
+    h.unix_fs.fs_format();
+    EXPECT_EQ(h.exec_unix("more /ghost.txt"), -1);
 }
 
 }  // namespace

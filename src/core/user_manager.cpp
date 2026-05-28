@@ -140,4 +140,37 @@ const UserRecord* UserManager::find_user(uint16_t uid) const {
     return nullptr;
 }
 
+const UserRecord* UserManager::find_user(const char* username) const {
+    for (int i = 0; i < user_count_; ++i) {
+        if (std::strncmp(users_[i].username, username, PWDSIZ) == 0) {
+            return &users_[i];
+        }
+    }
+    return nullptr;
+}
+
+int UserManager::su(uint16_t uid, const char* password) {
+    const UserRecord* target = find_user(uid);
+    if (target == nullptr) return -1;
+
+    bool is_root = (current_index_ >= 0 && users_[current_index_].uid == 0);
+
+    // Root can su without password
+    if (!is_root) {
+        if (password == nullptr ||
+            std::strncmp(target->password, password, PWDSIZ) != 0) {
+            return -1;
+        }
+    }
+
+    // Find target index
+    for (int i = 0; i < user_count_; ++i) {
+        if (users_[i].uid == uid) {
+            current_index_ = i;
+            return 0;
+        }
+    }
+    return -1;
+}
+
 }  // namespace pfs

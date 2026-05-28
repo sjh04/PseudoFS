@@ -109,15 +109,102 @@ static void register_commands(CommandRegistry& reg) {
         "mkdir",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string& out) -> int {
-            if (args.empty()) {
-                out = "Usage: mkdir <path>";
+            bool mkdir_p = false;
+            std::string path;
+            for (auto& a : args) {
+                if (a == "-p") mkdir_p = true;
+                else path = a;
+            }
+            if (path.empty()) {
+                out = "Usage: mkdir [-p] <path>";
                 return -1;
             }
-            int ret = fs.fs_mkdir(args[0].c_str());
-            if (ret != 0) out = "mkdir: failed";
-            return ret;
+            if (!mkdir_p) {
+                int ret = fs.fs_mkdir(path.c_str());
+                if (ret != 0) out = "mkdir: failed";
+                return ret;
+            }
+            // -p: create each level
+            std::string cur;
+            size_t pos = 0;
+            if (path[0] == '/') { cur = "/"; pos = 1; }
+            while (pos < path.size()) {
+                size_t slash = path.find('/', pos);
+                if (slash == std::string::npos) slash = path.size();
+                if (slash > pos) {
+                    cur += path.substr(pos, slash - pos);
+                    fs.fs_mkdir(cur.c_str());
+                    cur += "/";
+                }
+                pos = slash + 1;
+            }
+            // Final check: does the full path exist now?
+            FileStat st;
+            if (fs.fs_stat(path.c_str(), st) == 0) return 0;
+            out = "mkdir: failed";
+            return -1;
         },
-        "mkdir <path> — create directory");
+        "mkdir [-p] <path> — create directory");
+
+    reg.register_cmd(
+        "su",
+        [](IFileSystem&, UserManager& um, const std::vector<std::string>& args,
+           std::string& out) -> int {
+            if (args.empty()) {
+                out = "Usage: su <uid|username> [password]";
+                return -1;
+            }
+            // Try parsing as uid first, then by name
+            const UserRecord* u = um.find_user(args[0].c_str());
+            if (u == nullptr) {
+                uint16_t uid = static_cast<uint16_t>(std::stoi(args[0]));
+                u = um.find_user(uid);
+            }
+            if (u == nullptr) {
+                out = "su: user not found";
+                return -1;
+            }
+            const char* pw = args.size() > 1 ? args[1].c_str() : nullptr;
+            int ret = um.su(u->uid, pw);
+            if (ret != 0) {
+                out = "su: failed (need password or root)";
+                return -1;
+            }
+            out = "Switched to " + um.current_username();
+            return 0;
+        },
+        "su <uid|name> [pw] — switch user");
+
+    reg.register_cmd(
+        "more",
+        [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
+           std::string& out) -> int {
+            if (args.empty()) {
+                out = "Usage: more <file>";
+                return -1;
+            }
+            int fd = fs.fs_open(args[0].c_str(), O_READ);
+            if (fd < 0) {
+                out = "more: file not found";
+                return -1;
+            }
+            // Read entire file, return with line count prefix
+            std::vector<char> buf(65536, 0);
+            ssize_t n = fs.fs_read(fd, buf.data(), buf.size() - 1);
+            fs.fs_close(fd);
+            if (n < 0) {
+                out = "more: read error";
+                return -1;
+            }
+            std::string content(buf.data(), n);
+            int lines = 1;
+            for (auto c : content)
+                if (c == '\n') ++lines;
+            out = "--- more (" + std::to_string(lines) + " lines) ---\n" +
+                  content + "\n--- END ---";
+            return 0;
+        },
+        "more <file> — view file content");
 
     reg.register_cmd(
         "rmdir",
