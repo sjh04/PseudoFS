@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -455,6 +456,105 @@ static void register_commands(CommandRegistry& reg) {
             return 0;
         },
         "disk — show disk usage");
+
+    reg.register_cmd(
+        "tree",
+        [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
+           std::string& out) -> int {
+            int max_depth = 6;
+            const char* path = "";
+            for (size_t i = 0; i < args.size(); ++i) {
+                if (args[i] == "-d" && i + 1 < args.size()) {
+                    max_depth = std::stoi(args[++i]);
+                    if (max_depth < 1) max_depth = 1;
+                } else {
+                    path = args[i].c_str();
+                }
+            }
+            std::vector<DirEntry> top;
+            if (fs.fs_ls(path, top) != 0) {
+                out = "tree: cannot list";
+                return -1;
+            }
+            // Build tree recursively
+            std::function<void(const std::vector<DirEntry>&,
+                               const std::string&, int, const std::string&)>
+                walk = [&](const std::vector<DirEntry>& entries,
+                           const std::string& base, int depth,
+                           const std::string& prefix) {
+                    if (depth > max_depth) return;
+                    for (size_t idx = 0; idx < entries.size(); ++idx) {
+                        auto& e = entries[idx];
+                        if (std::strcmp(e.name, ".") == 0) continue;
+                        if (std::strcmp(e.name, "..") == 0) continue;
+                        bool last = (idx == entries.size() - 1);
+                        out += prefix + (last ? "\\-- " : "|-- ");
+                        out += e.name;
+                        if (e.type == TYPE_DIR) out += "/";
+                        out += "\n";
+                        if (e.type == TYPE_DIR &&
+                            depth < max_depth) {
+                            std::string child =
+                                base + "/" + std::string(e.name);
+                            std::vector<DirEntry> kids;
+                            if (fs.fs_ls(child.c_str(), kids) == 0) {
+                                std::string next_prefix =
+                                    prefix + (last ? "    " : "|   ");
+                                walk(kids, child, depth + 1,
+                                     next_prefix);
+                            }
+                        }
+                    }
+                };
+            out.clear();
+            walk(top, ".", 1, "");
+            if (out.empty()) out = "(empty)";
+            return 0;
+        },
+        "tree [-d N] [path] — show directory tree");
+
+    reg.register_cmd(
+        "mv",
+        [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
+           std::string& out) -> int {
+            if (args.size() < 2) {
+                out = "Usage: mv <src> <dst>";
+                return -1;
+            }
+            FileStat st{};
+            if (fs.fs_stat(args[0].c_str(), st) != 0) {
+                out = "mv: source not found";
+                return -1;
+            }
+            if (st.type == TYPE_DIR) {
+                out = "mv: directory move not supported (use cp+rm)";
+                return -1;
+            }
+            // Copy file content
+            int sfd = fs.fs_open(args[0].c_str(), O_READ);
+            if (sfd < 0) {
+                out = "mv: cannot read source";
+                return -1;
+            }
+            fs.fs_create(args[1].c_str(), DEFAULT_MODE);
+            int dfd = fs.fs_open(args[1].c_str(), O_WRITE);
+            if (dfd < 0) {
+                fs.fs_close(sfd);
+                out = "mv: cannot create dest";
+                return -1;
+            }
+            char buf[4096];
+            ssize_t n;
+            while ((n = fs.fs_read(sfd, buf, sizeof(buf))) > 0) {
+                fs.fs_write(dfd, buf, n);
+            }
+            fs.fs_close(sfd);
+            fs.fs_close(dfd);
+            fs.fs_delete(args[0].c_str());
+            out = "Moved.";
+            return 0;
+        },
+        "mv <src> <dst> — move/rename file");
 
     reg.register_cmd(
         "help",
