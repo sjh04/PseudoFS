@@ -171,11 +171,20 @@ static void register_commands(CommandRegistry& reg) {
                 out = "Usage: su <uid|username> [password]";
                 return -1;
             }
-            // Try parsing as uid first, then by name
+            // Resolve the target: try by name first, then as a numeric uid.
+            // Only attempt the uid parse when the arg is actually all-digits —
+            // otherwise std::stoi on a bad name (e.g. "su alice") would throw,
+            // surfacing a confusing "invalid numeric argument" instead of the
+            // real problem.
             const UserRecord* u = um.find_user(args[0].c_str());
             if (u == nullptr) {
-                uint16_t uid = static_cast<uint16_t>(std::stoi(args[0]));
-                u = um.find_user(uid);
+                const std::string& who = args[0];
+                bool numeric = !who.empty() &&
+                               who.find_first_not_of("0123456789") ==
+                                   std::string::npos;
+                if (numeric) {
+                    u = um.find_user(static_cast<uint16_t>(std::stoi(who)));
+                }
             }
             if (u == nullptr) {
                 out = "su: user not found";
@@ -439,7 +448,22 @@ static void register_commands(CommandRegistry& reg) {
                 return -1;
             }
             int fd = std::stoi(args[0]);
-            size_t len = (args.size() > 1) ? std::stoul(args[1]) : 4096;
+            size_t len = 4096;
+            if (args.size() > 1) {
+                // Reject negative/empty before std::stoul, which would silently
+                // wrap "-5" into a near-ULONG_MAX value and blow up the buffer
+                // allocation below with a confusing length_error.
+                const std::string& len_arg = args[1];
+                if (len_arg.empty() || len_arg[0] == '-') {
+                    out = "read: invalid length";
+                    return -1;
+                }
+                len = std::stoul(len_arg);
+            }
+            // Cap the request so a typo can't trigger a multi-gigabyte alloc.
+            // The whole data region is far smaller than this anyway.
+            constexpr size_t kMaxReadLen = 1u << 20;  // 1 MiB
+            if (len > kMaxReadLen) len = kMaxReadLen;
             std::vector<char> buf(len + 1, 0);
             ssize_t n = fs.fs_read(fd, buf.data(), len);
             if (n < 0) {

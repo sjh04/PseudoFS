@@ -1,5 +1,7 @@
 #include "shell/command_registry.h"
 
+#include <stdexcept>
+
 #include "core/user_manager.h"
 #include "core/vfs.h"
 
@@ -31,7 +33,25 @@ int CommandRegistry::execute(const std::string& cmdline, IFileSystem& fs, UserMa
 
     for (const auto& [name, entry] : commands_) {
         if (name == cmd_name) {
-            return entry.handler(fs, um, args, output);
+            // Safety net: a handler must never crash the whole program. Several
+            // commands parse numeric args with std::stoi/stoul, which throw on
+            // non-numeric input (e.g. "close abc", "su alice" for an unknown
+            // user). An uncaught throw here would propagate out of the TUI/CLI
+            // loop and std::terminate() the process — in the TUI that silently
+            // drops the user out of the interface. Convert any handler
+            // exception into a normal error result instead.
+            try {
+                return entry.handler(fs, um, args, output);
+            } catch (const std::invalid_argument&) {
+                output = cmd_name + ": invalid numeric argument";
+                return -1;
+            } catch (const std::out_of_range&) {
+                output = cmd_name + ": numeric argument out of range";
+                return -1;
+            } catch (const std::exception& e) {
+                output = cmd_name + ": error: " + e.what();
+                return -1;
+            }
         }
     }
 
