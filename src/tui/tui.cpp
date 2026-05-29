@@ -281,6 +281,15 @@ void Tui::run() {
                 wprintw(w.term_win, "  %s\n", output.c_str());
             }
 
+            // Refresh the side panels so the tree / disk / title reflect what
+            // the command just did (mkdir, cd, rm, ...). Sync the engine to the
+            // current user first so the tree shows the logged-in user's view
+            // immediately after login/su.
+            fs_->set_user(um_->current_uid(), um_->current_gid());
+            draw_title(w);
+            draw_tree(w, 1, tree_h(w.max_y) - 1);
+            draw_disk(w, 1);
+
             input_buf.clear();
             draw_prompt(w);
             wrefresh(w.term_win);

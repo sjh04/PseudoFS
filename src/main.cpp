@@ -731,12 +731,33 @@ int main(int argc, char* argv[]) {
     if (force_format) um.save_to_file(USERS_FILE);  // --format: reset to root
 
     if (use_tui) {
-        // --- TUI mode: separate disks for each FS ---
-        BlockDevice dev(TOTAL_BLK_NUM, BLOCK_SIZE);
-        UnixFs unix_fs(dev);
-        Fat16Fs fat16_fs(dev);
-        unix_fs.set_disk_path("pfs_tui_unix.img");
-        fat16_fs.set_disk_path("pfs_tui_fat16.img");
+        // --- TUI mode: each engine gets its OWN BlockDevice ---
+        // UNIX and FAT16 have incompatible on-disk layouts; sharing one device
+        // means whichever engine formats/loads last clobbers the other's bytes,
+        // and fs_mount() (which only re-reads the device buffer) then sees
+        // garbage. Independent devices let both stay mounted at once, so F2
+        // just swaps the active pointer and each saves to its own image.
+        const char* unix_img = "pfs_tui_unix.img";
+        const char* fat16_img = "pfs_tui_fat16.img";
+
+        BlockDevice unix_dev(TOTAL_BLK_NUM, BLOCK_SIZE);
+        BlockDevice fat16_dev(TOTAL_BLK_NUM, BLOCK_SIZE);
+        UnixFs unix_fs(unix_dev);
+        Fat16Fs fat16_fs(fat16_dev);
+        unix_fs.set_disk_path(unix_img);
+        fat16_fs.set_disk_path(fat16_img);
+
+        // Each engine: load its image + mount, else format fresh.
+        if (force_format || unix_dev.load_from_file(unix_img) != 0) {
+            unix_fs.fs_format();
+        } else if (unix_fs.fs_mount() != 0) {
+            unix_fs.fs_format();
+        }
+        if (force_format || fat16_dev.load_from_file(fat16_img) != 0) {
+            fat16_fs.fs_format();
+        } else if (fat16_fs.fs_mount() != 0) {
+            fat16_fs.fs_format();
+        }
 
         IFileSystem* primary =
             use_fat16 ? static_cast<IFileSystem*>(&fat16_fs)
@@ -745,29 +766,14 @@ int main(int argc, char* argv[]) {
             use_fat16 ? static_cast<IFileSystem*>(&unix_fs)
                       : static_cast<IFileSystem*>(&fat16_fs);
 
-        // Mount or format primary
-        if (!force_format && dev.load_from_file(
-                use_fat16 ? "pfs_tui_fat16.img" : "pfs_tui_unix.img") == 0) {
-            if (primary->fs_mount() != 0) primary->fs_format();
-        } else {
-            primary->fs_format();
-        }
-        // Mount alt if its image exists, else format
-        if (dev.load_from_file(
-                use_fat16 ? "pfs_tui_unix.img" : "pfs_tui_fat16.img") == 0) {
-            alt->fs_mount();
-        } else {
-            alt->fs_format();
-        }
-        // Restore primary
-        primary->fs_mount();
-
         Tui tui(*primary, *alt, um, reg);
         tui.run();
 
-        primary->fs_unmount();
-        dev.save_to_file("pfs_tui_unix.img");
-        dev.save_to_file("pfs_tui_fat16.img");
+        // Persist each engine to its own image — no cross-clobber.
+        unix_fs.fs_unmount();
+        fat16_fs.fs_unmount();
+        unix_dev.save_to_file(unix_img);
+        fat16_dev.save_to_file(fat16_img);
         std::printf("Disks saved. Goodbye.\n");
         return 0;
     }
