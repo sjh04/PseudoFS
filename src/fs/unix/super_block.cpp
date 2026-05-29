@@ -185,6 +185,32 @@ void SuperBlock::ifree(uint16_t inode_no) {
     sb_.s_fmod = 1;
 }
 
+void SuperBlock::collect_free_blocks(std::vector<uint16_t>& out) {
+    out.clear();
+    // In-memory group: s_free[1..s_nfree-1] are free blocks; s_free[0] is the
+    // link to the next on-disk group (or END_OF_CHAIN).
+    for (uint16_t i = 1; i < sb_.s_nfree; i++) {
+        out.push_back(sb_.s_free[i]);
+    }
+
+    uint16_t link = (sb_.s_nfree >= 1) ? sb_.s_free[0] : END_OF_CHAIN;
+    uint8_t buf[BLOCK_SIZE];
+    // Bound the walk by the data-block count to survive a corrupt/cyclic chain.
+    for (uint32_t guard = 0; link != END_OF_CHAIN && guard < DATA_BLK_NUM;
+         ++guard) {
+        out.push_back(link);  // the storage block itself is a free block
+        dev_.read_block(DATA_START_BLK + link, buf);
+        auto* grp = reinterpret_cast<uint16_t*>(buf);
+        uint16_t count = grp[0];
+        uint16_t next = grp[1];  // entry[0] = link to next group
+        if (count == 0 || count > NICFREE) break;  // corrupt group
+        for (uint16_t i = 2; i <= count; i++) {     // entry[1..count-1]
+            out.push_back(grp[i]);
+        }
+        link = next;
+    }
+}
+
 uint16_t SuperBlock::free_block_count() const {
     return sb_.s_free_total;
 }

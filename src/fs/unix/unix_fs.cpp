@@ -646,10 +646,23 @@ DiskUsage UnixFs::fs_disk_usage() const {
     return du;
 }
 
-void UnixFs::set_user(uint16_t uid, uint16_t gid, uint16_t slot) {
+void UnixFs::fs_block_map(std::vector<uint8_t>& out) {
+    out.assign(TOTAL_BLK_NUM, BLK_USED);
+    // Boot block + superblock + the whole inode region are fixed metadata.
+    for (uint32_t b = 0; b < DATA_START_BLK; ++b) out[b] = BLK_META;
+    // Data area defaults to USED; the group-linked chain tells us which are free.
+    std::vector<uint16_t> free_blocks;
+    sb_.collect_free_blocks(free_blocks);
+    for (uint16_t fb : free_blocks) {
+        uint32_t abs = DATA_START_BLK + fb;
+        if (abs < TOTAL_BLK_NUM) out[abs] = BLK_FREE;
+    }
+}
+
+void UnixFs::set_user(uint16_t uid, uint16_t gid) {
     cur_uid_ = uid;
     cur_gid_ = gid;
-    user_slot_ = slot;
+    user_slot_ = 0;
 }
 
 void UnixFs::set_disk_path(const std::string& path) {

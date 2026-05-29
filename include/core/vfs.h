@@ -13,6 +13,11 @@ constexpr int O_APPEND = 4;
 constexpr uint8_t TYPE_FILE = 0;
 constexpr uint8_t TYPE_DIR = 1;
 
+// Per-block status categories returned by fs_block_map() for the disk view.
+constexpr uint8_t BLK_FREE = 0;  // allocatable, currently unused
+constexpr uint8_t BLK_USED = 1;  // holds file/dir/indirect data
+constexpr uint8_t BLK_META = 2;  // reserved metadata (superblock / inode area / FAT / ...)
+
 struct DirEntry {
     char name[14];
     uint16_t inode_no;
@@ -47,6 +52,9 @@ class IFileSystem {
     virtual int fs_mount() = 0;
     virtual int fs_unmount() = 0;
 
+    // Set the current user context for permission checks (driven by login/su).
+    virtual void set_user(uint16_t uid, uint16_t gid) = 0;
+
     virtual int fs_create(const char* path, uint16_t mode) = 0;
     virtual int fs_open(const char* path, int flags) = 0;
     virtual int fs_close(int fd) = 0;
@@ -67,6 +75,10 @@ class IFileSystem {
 
     virtual std::string fs_type_name() const = 0;
     virtual DiskUsage fs_disk_usage() const = 0;
+
+    // Fill `out` with one status byte (BLK_FREE/BLK_USED/BLK_META) per disk
+    // block; out.size() becomes the total block count. Drives the TUI disk view.
+    virtual void fs_block_map(std::vector<uint8_t>& out) = 0;
 };
 
 }  // namespace pfs

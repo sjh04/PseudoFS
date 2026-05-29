@@ -40,9 +40,10 @@ class UnixFs : public IFileSystem {
 
     std::string fs_type_name() const override;
     DiskUsage fs_disk_usage() const override;
+    void fs_block_map(std::vector<uint8_t>& out) override;
 
-    // slot: OFT user slot (0..MAX_USER-1), uid/gid: actual UNIX ids for permissions
-    void set_user(uint16_t uid, uint16_t gid, uint16_t slot = 0);
+    // uid/gid: actual UNIX ids used for permission checks
+    void set_user(uint16_t uid, uint16_t gid) override;
 
     // Set the disk image path for auto-sync. When set, every write
     // operation (create/write/delete/mkdir/rmdir/chmod/link) flushes

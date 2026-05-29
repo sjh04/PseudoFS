@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 #include "core/block_device.h"
 #include "core/constants.h"
@@ -54,6 +55,11 @@ class SuperBlock {
 
     // Free an inode number.
     void ifree(uint16_t inode_no);
+
+    // Enumerate every free data block (0-based) by walking the group-linked
+    // chain read-only. For diagnostics / disk visualization. The result size
+    // equals free_block_count() on a consistent disk.
+    void collect_free_blocks(std::vector<uint16_t>& out);
 
     // Accessors
     uint16_t free_block_count() const;

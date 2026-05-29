@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -8,14 +9,109 @@
 #include "core/vfs.h"
 #include "fs/fat16/fat16_fs.h"
 #include "fs/unix/unix_fs.h"
+#include "core/user_manager.h"
 #include "shell/command_registry.h"
+#include "tui/tui.h"
 
 using namespace pfs;
 
 static const char* UNIX_DISK = "pfs_unix.img";
 static const char* FAT16_DISK = "pfs_fat16.img";
+// User accounts live outside the FS image so a single table is shared across
+// both engines and both (CLI / TUI) modes.
+static const char* USERS_FILE = "pfs_users.dat";
+
+// Explain a failed open: fs_open returns -1 for both "missing" and "denied".
+// If the path still resolves via stat, it exists and the open was blocked by a
+// permission check; otherwise it really isn't there. Lets commands report
+// "permission denied" instead of a misleading "file not found".
+static std::string open_error(IFileSystem& fs, const std::string& path) {
+    FileStat st{};
+    return fs.fs_stat(path.c_str(), st) == 0 ? "permission denied"
+                                             : "no such file";
+}
 
 static void register_commands(CommandRegistry& reg) {
+    reg.register_cmd(
+        "login",
+        [](IFileSystem&, UserManager& um, const std::vector<std::string>& args,
+           std::string& out) -> int {
+            if (args.size() < 2) {
+                out = "Usage: login <username> <password>";
+                return -1;
+            }
+            int uid = um.login(args[0].c_str(), args[1].c_str());
+            if (uid < 0) {
+                out = "Login failed.";
+                return -1;
+            }
+            out = "Welcome, " + um.current_username() +
+                  " (uid=" + std::to_string(uid) + ")";
+            return 0;
+        },
+        "login <user> <pw> — log in");
+
+    reg.register_cmd(
+        "logout",
+        [](IFileSystem&, UserManager& um, const std::vector<std::string>&,
+           std::string& out) -> int {
+            if (!um.is_logged_in()) {
+                out = "Not logged in.";
+                return -1;
+            }
+            um.logout();
+            out = "Logged out.";
+            return 0;
+        },
+        "logout — log out");
+
+    reg.register_cmd(
+        "useradd",
+        [](IFileSystem& fs, UserManager& um, const std::vector<std::string>& args,
+           std::string& out) -> int {
+            if (args.size() < 4) {
+                out = "Usage: useradd <username> <password> <uid> <gid>";
+                return -1;
+            }
+            uint16_t uid = static_cast<uint16_t>(std::stoi(args[2]));
+            uint16_t gid = static_cast<uint16_t>(std::stoi(args[3]));
+            int ret = um.add_user(args[0].c_str(), args[1].c_str(), uid, gid);
+            if (ret != 0) {
+                out = "useradd: failed (need root, unique name, and free slot)";
+                return -1;
+            }
+            // Create home directory for the new user. /home stays root-owned;
+            // the per-user dir is created as the new user so they own it (and
+            // can actually write in it after logging in).
+            std::string home = "/home/" + std::string(args[0]);
+            fs.fs_mkdir("/home");
+            fs.set_user(uid, gid);
+            fs.fs_mkdir(home.c_str());
+            fs.set_user(um.current_uid(), um.current_gid());  // restore to root
+            out = "User " + std::string(args[0]) + " created.";
+            return 0;
+        },
+        "useradd <user> <pw> <uid> <gid> — create user (root only)");
+
+    reg.register_cmd(
+        "passwd",
+        [](IFileSystem&, UserManager& um, const std::vector<std::string>& args,
+           std::string& out) -> int {
+            if (args.size() < 2) {
+                out = "Usage: passwd <old-password> <new-password>";
+                return -1;
+            }
+            int ret =
+                um.change_password(um.current_uid(), args[0].c_str(), args[1].c_str());
+            if (ret != 0) {
+                out = "passwd: failed (check old password)";
+                return -1;
+            }
+            out = "Password changed.";
+            return 0;
+        },
+        "passwd <old> <new> — change password");
+
     reg.register_cmd(
         "format",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>&,
@@ -30,15 +126,138 @@ static void register_commands(CommandRegistry& reg) {
         "mkdir",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string& out) -> int {
-            if (args.empty()) {
-                out = "Usage: mkdir <path>";
+            bool mkdir_p = false;
+            std::string path;
+            for (auto& a : args) {
+                if (a == "-p") mkdir_p = true;
+                else path = a;
+            }
+            if (path.empty()) {
+                out = "Usage: mkdir [-p] <path>";
                 return -1;
             }
-            int ret = fs.fs_mkdir(args[0].c_str());
-            if (ret != 0) out = "mkdir: failed";
-            return ret;
+            if (!mkdir_p) {
+                int ret = fs.fs_mkdir(path.c_str());
+                if (ret != 0) out = "mkdir: failed";
+                return ret;
+            }
+            // -p: create each level
+            std::string cur;
+            size_t pos = 0;
+            if (path[0] == '/') { cur = "/"; pos = 1; }
+            while (pos < path.size()) {
+                size_t slash = path.find('/', pos);
+                if (slash == std::string::npos) slash = path.size();
+                if (slash > pos) {
+                    cur += path.substr(pos, slash - pos);
+                    fs.fs_mkdir(cur.c_str());
+                    cur += "/";
+                }
+                pos = slash + 1;
+            }
+            // Final check: does the full path exist now?
+            FileStat st;
+            if (fs.fs_stat(path.c_str(), st) == 0) return 0;
+            out = "mkdir: failed";
+            return -1;
         },
-        "mkdir <path> — create directory");
+        "mkdir [-p] <path> — create directory");
+
+    reg.register_cmd(
+        "su",
+        [](IFileSystem&, UserManager& um, const std::vector<std::string>& args,
+           std::string& out) -> int {
+            if (args.empty()) {
+                out = "Usage: su <uid|username> [password]";
+                return -1;
+            }
+            // Try parsing as uid first, then by name
+            const UserRecord* u = um.find_user(args[0].c_str());
+            if (u == nullptr) {
+                uint16_t uid = static_cast<uint16_t>(std::stoi(args[0]));
+                u = um.find_user(uid);
+            }
+            if (u == nullptr) {
+                out = "su: user not found";
+                return -1;
+            }
+            const char* pw = args.size() > 1 ? args[1].c_str() : nullptr;
+            int ret = um.su(u->uid, pw);
+            if (ret != 0) {
+                out = "su: failed (need password or root)";
+                return -1;
+            }
+            out = "Switched to " + um.current_username();
+            return 0;
+        },
+        "su <uid|name> [pw] — switch user");
+
+    reg.register_cmd(
+        "more",
+        [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
+           std::string& out) -> int {
+            if (args.empty()) {
+                out = "Usage: more <file>";
+                return -1;
+            }
+            int fd = fs.fs_open(args[0].c_str(), O_READ);
+            if (fd < 0) {
+                out = "more: " + open_error(fs, args[0]);
+                return -1;
+            }
+            // Read entire file, return with line count prefix
+            std::vector<char> buf(65536, 0);
+            ssize_t n = fs.fs_read(fd, buf.data(), buf.size() - 1);
+            fs.fs_close(fd);
+            if (n < 0) {
+                out = "more: read error";
+                return -1;
+            }
+            std::string content(buf.data(), n);
+            int lines = 1;
+            for (auto c : content)
+                if (c == '\n') ++lines;
+            out = "--- more (" + std::to_string(lines) + " lines) ---\n" +
+                  content + "\n--- END ---";
+            return 0;
+        },
+        "more <file> — view file content");
+
+    reg.register_cmd(
+        "find",
+        [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
+           std::string& out) -> int {
+            if (args.size() < 2) {
+                out = "Usage: find <path> <name>";
+                return -1;
+            }
+            const char* start = args[0].c_str();
+            const std::string& pattern = args[1];
+            out.clear();
+            // Recursive search
+            std::function<void(const std::string&)> search =
+                [&](const std::string& dir) {
+                    std::vector<DirEntry> entries;
+                    if (fs.fs_ls(dir.c_str(), entries) != 0) return;
+                    for (auto& e : entries) {
+                        if (std::strcmp(e.name, ".") == 0 ||
+                            std::strcmp(e.name, "..") == 0)
+                            continue;
+                        std::string full =
+                            (dir == "/") ? "/" + std::string(e.name)
+                                         : dir + "/" + std::string(e.name);
+                        if (std::string(e.name).find(pattern) !=
+                            std::string::npos) {
+                            out += full + "\n";
+                        }
+                        if (e.type == TYPE_DIR) search(full);
+                    }
+                };
+            search(start);
+            if (out.empty()) out = "(no matches)";
+            return 0;
+        },
+        "find <path> <name> — search files by name");
 
     reg.register_cmd(
         "rmdir",
@@ -56,14 +275,17 @@ static void register_commands(CommandRegistry& reg) {
 
     reg.register_cmd(
         "cd",
-        [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
+        [](IFileSystem& fs, UserManager& um, const std::vector<std::string>& args,
            std::string& out) -> int {
-            const char* path = args.empty() ? "/" : args[0].c_str();
-            int ret = fs.fs_chdir(path);
+            std::string path = args.empty() ? "/" : args[0];
+            if (!path.empty() && path[0] == '~') {
+                path = "/home/" + um.current_username() + path.substr(1);
+            }
+            int ret = fs.fs_chdir(path.c_str());
             if (ret != 0) out = "cd: no such directory";
             return ret;
         },
-        "cd [path] — change directory");
+        "cd [path] — change directory (~ = home)");
 
     reg.register_cmd(
         "pwd",
@@ -185,7 +407,7 @@ static void register_commands(CommandRegistry& reg) {
             }
             int fd = fs.fs_open(args[0].c_str(), flags);
             if (fd < 0) {
-                out = "open: failed";
+                out = "open: " + open_error(fs, args[0]);
                 return -1;
             }
             out = "fd=" + std::to_string(fd);
@@ -263,7 +485,7 @@ static void register_commands(CommandRegistry& reg) {
             }
             int fd = fs.fs_open(args[0].c_str(), O_READ);
             if (fd < 0) {
-                out = "cat: file not found";
+                out = "cat: " + open_error(fs, args[0]);
                 return -1;
             }
             std::vector<char> buf(8192, 0);
@@ -342,7 +564,7 @@ static void register_commands(CommandRegistry& reg) {
             }
             int src_fd = fs.fs_open(args[0].c_str(), O_READ);
             if (src_fd < 0) {
-                out = "cp: source not found";
+                out = "cp: source: " + open_error(fs, args[0]);
                 return -1;
             }
             fs.fs_create(args[1].c_str(), DEFAULT_MODE);
@@ -379,6 +601,105 @@ static void register_commands(CommandRegistry& reg) {
         "disk — show disk usage");
 
     reg.register_cmd(
+        "tree",
+        [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
+           std::string& out) -> int {
+            int max_depth = 6;
+            const char* path = "";
+            for (size_t i = 0; i < args.size(); ++i) {
+                if (args[i] == "-d" && i + 1 < args.size()) {
+                    max_depth = std::stoi(args[++i]);
+                    if (max_depth < 1) max_depth = 1;
+                } else {
+                    path = args[i].c_str();
+                }
+            }
+            std::vector<DirEntry> top;
+            if (fs.fs_ls(path, top) != 0) {
+                out = "tree: cannot list";
+                return -1;
+            }
+            // Build tree recursively
+            std::function<void(const std::vector<DirEntry>&,
+                               const std::string&, int, const std::string&)>
+                walk = [&](const std::vector<DirEntry>& entries,
+                           const std::string& base, int depth,
+                           const std::string& prefix) {
+                    if (depth > max_depth) return;
+                    for (size_t idx = 0; idx < entries.size(); ++idx) {
+                        auto& e = entries[idx];
+                        if (std::strcmp(e.name, ".") == 0) continue;
+                        if (std::strcmp(e.name, "..") == 0) continue;
+                        bool last = (idx == entries.size() - 1);
+                        out += prefix + (last ? "\\-- " : "|-- ");
+                        out += e.name;
+                        if (e.type == TYPE_DIR) out += "/";
+                        out += "\n";
+                        if (e.type == TYPE_DIR &&
+                            depth < max_depth) {
+                            std::string child =
+                                base + "/" + std::string(e.name);
+                            std::vector<DirEntry> kids;
+                            if (fs.fs_ls(child.c_str(), kids) == 0) {
+                                std::string next_prefix =
+                                    prefix + (last ? "    " : "|   ");
+                                walk(kids, child, depth + 1,
+                                     next_prefix);
+                            }
+                        }
+                    }
+                };
+            out.clear();
+            walk(top, ".", 1, "");
+            if (out.empty()) out = "(empty)";
+            return 0;
+        },
+        "tree [-d N] [path] — show directory tree");
+
+    reg.register_cmd(
+        "mv",
+        [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
+           std::string& out) -> int {
+            if (args.size() < 2) {
+                out = "Usage: mv <src> <dst>";
+                return -1;
+            }
+            FileStat st{};
+            if (fs.fs_stat(args[0].c_str(), st) != 0) {
+                out = "mv: source not found";
+                return -1;
+            }
+            if (st.type == TYPE_DIR) {
+                out = "mv: directory move not supported (use cp+rm)";
+                return -1;
+            }
+            // Copy file content
+            int sfd = fs.fs_open(args[0].c_str(), O_READ);
+            if (sfd < 0) {
+                out = "mv: cannot read source";
+                return -1;
+            }
+            fs.fs_create(args[1].c_str(), DEFAULT_MODE);
+            int dfd = fs.fs_open(args[1].c_str(), O_WRITE);
+            if (dfd < 0) {
+                fs.fs_close(sfd);
+                out = "mv: cannot create dest";
+                return -1;
+            }
+            char buf[4096];
+            ssize_t n;
+            while ((n = fs.fs_read(sfd, buf, sizeof(buf))) > 0) {
+                fs.fs_write(dfd, buf, n);
+            }
+            fs.fs_close(sfd);
+            fs.fs_close(dfd);
+            fs.fs_delete(args[0].c_str());
+            out = "Moved.";
+            return 0;
+        },
+        "mv <src> <dst> — move/rename file");
+
+    reg.register_cmd(
         "help",
         [&reg](IFileSystem&, UserManager&, const std::vector<std::string>&,
                std::string& out) -> int {
@@ -401,14 +722,73 @@ static void register_commands(CommandRegistry& reg) {
 }
 
 int main(int argc, char* argv[]) {
+    bool use_tui = false;
     bool use_fat16 = false;
     bool force_format = false;
 
     for (int i = 1; i < argc; i++) {
+        if (std::strcmp(argv[i], "--tui") == 0) use_tui = true;
         if (std::strcmp(argv[i], "--fat16") == 0) use_fat16 = true;
         if (std::strcmp(argv[i], "--format") == 0) force_format = true;
     }
 
+    CommandRegistry reg;
+    register_commands(reg);
+
+    UserManager um;
+    if (!force_format) um.load_from_file(USERS_FILE);  // restore prior accounts
+    um.set_persist_path(USERS_FILE);  // auto-save on useradd/passwd
+    if (force_format) um.save_to_file(USERS_FILE);  // --format: reset to root
+
+    if (use_tui) {
+        // --- TUI mode: each engine gets its OWN BlockDevice ---
+        // UNIX and FAT16 have incompatible on-disk layouts; sharing one device
+        // means whichever engine formats/loads last clobbers the other's bytes,
+        // and fs_mount() (which only re-reads the device buffer) then sees
+        // garbage. Independent devices let both stay mounted at once, so F2
+        // just swaps the active pointer and each saves to its own image.
+        const char* unix_img = "pfs_tui_unix.img";
+        const char* fat16_img = "pfs_tui_fat16.img";
+
+        BlockDevice unix_dev(TOTAL_BLK_NUM, BLOCK_SIZE);
+        BlockDevice fat16_dev(TOTAL_BLK_NUM, BLOCK_SIZE);
+        UnixFs unix_fs(unix_dev);
+        Fat16Fs fat16_fs(fat16_dev);
+        unix_fs.set_disk_path(unix_img);
+        fat16_fs.set_disk_path(fat16_img);
+
+        // Each engine: load its image + mount, else format fresh.
+        if (force_format || unix_dev.load_from_file(unix_img) != 0) {
+            unix_fs.fs_format();
+        } else if (unix_fs.fs_mount() != 0) {
+            unix_fs.fs_format();
+        }
+        if (force_format || fat16_dev.load_from_file(fat16_img) != 0) {
+            fat16_fs.fs_format();
+        } else if (fat16_fs.fs_mount() != 0) {
+            fat16_fs.fs_format();
+        }
+
+        IFileSystem* primary =
+            use_fat16 ? static_cast<IFileSystem*>(&fat16_fs)
+                      : static_cast<IFileSystem*>(&unix_fs);
+        IFileSystem* alt =
+            use_fat16 ? static_cast<IFileSystem*>(&unix_fs)
+                      : static_cast<IFileSystem*>(&fat16_fs);
+
+        Tui tui(*primary, *alt, um, reg);
+        tui.run();
+
+        // Persist each engine to its own image — no cross-clobber.
+        unix_fs.fs_unmount();
+        fat16_fs.fs_unmount();
+        unix_dev.save_to_file(unix_img);
+        fat16_dev.save_to_file(fat16_img);
+        std::printf("Disks saved. Goodbye.\n");
+        return 0;
+    }
+
+    // --- CLI mode ---
     const char* disk_path = use_fat16 ? FAT16_DISK : UNIX_DISK;
 
     BlockDevice dev(TOTAL_BLK_NUM, BLOCK_SIZE);
@@ -430,11 +810,23 @@ int main(int argc, char* argv[]) {
         fs->fs_format();
     }
 
-    CommandRegistry reg;
-    register_commands(reg);
-
     std::printf("PseudoFS v2.0 [%s] — type 'help' for commands, 'exit' to quit\n",
                 fs->fs_type_name().c_str());
+
+    std::vector<std::string> history;
+    // Register history command after history vector exists
+    reg.register_cmd(
+        "history",
+        [&history](IFileSystem&, UserManager&, const std::vector<std::string>&,
+                   std::string& out) -> int {
+            out.clear();
+            for (size_t i = 0; i < history.size(); ++i) {
+                out += std::to_string(i + 1) + "  " + history[i] + "\n";
+            }
+            if (out.empty()) out = "(no history)";
+            return 0;
+        },
+        "history — show command history");
 
     char input[1024];
     while (true) {
@@ -446,9 +838,9 @@ int main(int argc, char* argv[]) {
         if (len > 0 && input[len - 1] == '\n') input[len - 1] = '\0';
         if (input[0] == '\0') continue;
 
+        history.push_back(input);
+
         std::string output;
-        alignas(64) char um_buf[128];
-        UserManager& um = *reinterpret_cast<UserManager*>(um_buf);
         int ret = reg.execute(input, *fs, um, output);
 
         if (output == "__EXIT__") break;
