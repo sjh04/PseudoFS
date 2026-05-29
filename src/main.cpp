@@ -21,6 +21,16 @@ static const char* FAT16_DISK = "pfs_fat16.img";
 // both engines and both (CLI / TUI) modes.
 static const char* USERS_FILE = "pfs_users.dat";
 
+// Explain a failed open: fs_open returns -1 for both "missing" and "denied".
+// If the path still resolves via stat, it exists and the open was blocked by a
+// permission check; otherwise it really isn't there. Lets commands report
+// "permission denied" instead of a misleading "file not found".
+static std::string open_error(IFileSystem& fs, const std::string& path) {
+    FileStat st{};
+    return fs.fs_stat(path.c_str(), st) == 0 ? "permission denied"
+                                             : "no such file";
+}
+
 static void register_commands(CommandRegistry& reg) {
     reg.register_cmd(
         "login",
@@ -192,7 +202,7 @@ static void register_commands(CommandRegistry& reg) {
             }
             int fd = fs.fs_open(args[0].c_str(), O_READ);
             if (fd < 0) {
-                out = "more: file not found";
+                out = "more: " + open_error(fs, args[0]);
                 return -1;
             }
             // Read entire file, return with line count prefix
@@ -397,7 +407,7 @@ static void register_commands(CommandRegistry& reg) {
             }
             int fd = fs.fs_open(args[0].c_str(), flags);
             if (fd < 0) {
-                out = "open: failed";
+                out = "open: " + open_error(fs, args[0]);
                 return -1;
             }
             out = "fd=" + std::to_string(fd);
@@ -475,7 +485,7 @@ static void register_commands(CommandRegistry& reg) {
             }
             int fd = fs.fs_open(args[0].c_str(), O_READ);
             if (fd < 0) {
-                out = "cat: file not found";
+                out = "cat: " + open_error(fs, args[0]);
                 return -1;
             }
             std::vector<char> buf(8192, 0);
@@ -554,7 +564,7 @@ static void register_commands(CommandRegistry& reg) {
             }
             int src_fd = fs.fs_open(args[0].c_str(), O_READ);
             if (src_fd < 0) {
-                out = "cp: source not found";
+                out = "cp: source: " + open_error(fs, args[0]);
                 return -1;
             }
             fs.fs_create(args[1].c_str(), DEFAULT_MODE);
