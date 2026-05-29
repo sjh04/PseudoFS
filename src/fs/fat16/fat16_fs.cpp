@@ -563,6 +563,19 @@ DiskUsage Fat16Fs::fs_disk_usage() const {
     return usage;
 }
 
+void Fat16Fs::fs_block_map(std::vector<uint8_t>& out) {
+    out.assign(TOTAL_BLK_NUM, BLK_FREE);
+    // Boot sector + both FATs + the root directory region are fixed metadata.
+    for (uint32_t b = 0; b < kDataStart; ++b) out[b] = BLK_META;
+    // Each data cluster maps to one block; the FAT entry says used vs free.
+    for (uint16_t c = 2; c < 2 + kDataBlkCount; ++c) {
+        if (c >= fat_.size()) break;
+        uint32_t blk = cluster_to_block(c);
+        if (blk >= TOTAL_BLK_NUM) break;
+        out[blk] = (fat_[c] == FAT16_FREE_CLUSTER) ? BLK_FREE : BLK_USED;
+    }
+}
+
 // ======================== Internal Helpers ========================
 
 uint32_t Fat16Fs::cluster_to_block(uint16_t cluster) const {

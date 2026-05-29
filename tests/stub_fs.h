@@ -37,6 +37,7 @@ class StubFs : public IFileSystem {
 
     std::string fs_type_name() const override { return "STUB"; }
     DiskUsage fs_disk_usage() const override { return {}; }
+    void fs_block_map(std::vector<uint8_t>& out) override { out.clear(); }
 };
 
 }  // namespace pfs

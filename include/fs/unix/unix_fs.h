@@ -40,6 +40,7 @@ class UnixFs : public IFileSystem {
 
     std::string fs_type_name() const override;
     DiskUsage fs_disk_usage() const override;
+    void fs_block_map(std::vector<uint8_t>& out) override;
 
     // uid/gid: actual UNIX ids used for permission checks
     void set_user(uint16_t uid, uint16_t gid) override;

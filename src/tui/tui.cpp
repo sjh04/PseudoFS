@@ -93,7 +93,7 @@ void Tui::draw_title(Windows& w) {
     std::string user = um_->is_logged_in() ? um_->current_username() : "nobody";
     std::string fs_type = fs_->fs_type_name();
     mvwprintw(w.title_bar, 0, 1,
-              " PFS v2.0 | %s | user: %s | F1 Help  F2 SwitchFS  F10 Exit ",
+              " PFS v2.0 | %s | user: %s | F1 Help  F2 SwitchFS  F3 DiskMap  F10 Exit ",
               fs_type.c_str(), user.c_str());
     wrefresh(w.title_bar);
 }
@@ -155,7 +155,7 @@ void Tui::draw_disk(Windows& w, int start_line) {
 void Tui::draw_status(Windows& w) {
     wattron(w.status_bar, COLOR_PAIR(2));
     mvwprintw(w.status_bar, 0, 0,
-              " F1 Help | F2 SwitchFS | F5 Refresh | F10 Exit ");
+              " F1 Help | F2 SwitchFS | F3 DiskMap | F5 Refresh | F10 Exit ");
     wattroff(w.status_bar, COLOR_PAIR(2));
     wrefresh(w.status_bar);
 }
@@ -359,6 +359,77 @@ void Tui::run() {
             redraw_all(w, input_buf);
             refresh();
             break;
+        case KEY_F(3): {  // Full-screen disk block map
+            fs_->set_user(um_->current_uid(), um_->current_gid());
+            std::vector<uint8_t> bmap;
+            fs_->fs_block_map(bmap);
+
+            int used = 0, freeb = 0, meta = 0;
+            for (uint8_t s : bmap) {
+                if (s == BLK_USED) ++used;
+                else if (s == BLK_META) ++meta;
+                else ++freeb;
+            }
+
+            WINDOW* dw = newwin(w.max_y, w.max_x, 0, 0);
+            keypad(dw, TRUE);
+            werase(dw);
+            box(dw, 0, 0);
+            mvwprintw(dw, 0, 2, " Disk Block Map - %s - %d blocks ",
+                      fs_->fs_type_name().c_str(), static_cast<int>(bmap.size()));
+
+            int cols = w.max_x - 4;
+            if (cols < 16) cols = 16;
+            const int top = 2;
+            int max_rows = w.max_y - 5;  // leave room for legend + footer
+            int drawn = 0;
+            for (size_t i = 0; i < bmap.size(); ++i) {
+                int row = top + static_cast<int>(i) / cols;
+                if (row - top >= max_rows) break;
+                int col = 2 + static_cast<int>(i) % cols;
+                int pair;
+                char ch;
+                if (bmap[i] == BLK_USED) {
+                    pair = 5;
+                    ch = '#';
+                } else if (bmap[i] == BLK_META) {
+                    pair = 4;
+                    ch = 'M';
+                } else {
+                    pair = 1;
+                    ch = '.';
+                }
+                wattron(dw, COLOR_PAIR(pair));
+                mvwaddch(dw, row, col, ch);
+                wattroff(dw, COLOR_PAIR(pair));
+                ++drawn;
+            }
+
+            int ly = w.max_y - 2;
+            mvwprintw(dw, ly - 1, 2, "Legend:  ");
+            wattron(dw, COLOR_PAIR(5));
+            wprintw(dw, "# used");
+            wattroff(dw, COLOR_PAIR(5));
+            wprintw(dw, "   ");
+            wattron(dw, COLOR_PAIR(1));
+            wprintw(dw, ". free");
+            wattroff(dw, COLOR_PAIR(1));
+            wprintw(dw, "   ");
+            wattron(dw, COLOR_PAIR(4));
+            wprintw(dw, "M meta");
+            wattroff(dw, COLOR_PAIR(4));
+            mvwprintw(dw, ly, 2,
+                      "used=%d  free=%d  meta=%d%s   Press any key to close",
+                      used, freeb, meta,
+                      drawn < static_cast<int>(bmap.size()) ? "  (truncated)"
+                                                            : "");
+            wrefresh(dw);
+            wgetch(dw);
+            delwin(dw);
+            redraw_all(w, input_buf);
+            refresh();
+            break;
+        }
         case KEY_F(5):
             redraw_all(w, input_buf);
             refresh();
