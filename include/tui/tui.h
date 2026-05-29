@@ -35,6 +35,11 @@ private:
     void draw_prompt(Windows& w);
     void redraw_all(Windows& w, const std::string& input_buf);
     void switch_fs();
+
+    // Full-screen pager for `more`: shows `content` one screenful at a time.
+    // Space/PgDn = page forward, ↓/Enter = line forward, b/PgUp = page back,
+    // ↑ = line back, q = quit.
+    void page_content(Windows& w, const std::string& content);
 };
 
 }  // namespace pfs

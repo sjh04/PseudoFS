@@ -16,6 +16,13 @@ pfs
 # User account table
 pfs_users.dat
 
+# Operation log (C-05)
+*.log
+pfs_ops.log
+
+# CTest output
+/Testing/
+
 # IDE
 .vscode/
 .idea/

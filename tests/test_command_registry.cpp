@@ -51,6 +51,14 @@ TEST(TokenizeTest, QuotedStringWithEscape) {
     EXPECT_EQ(tokens[1], "a\"b");
 }
 
+TEST(TokenizeTest, QuotedStringInterpretsNewlineAndTab) {
+    // \n and \t inside quotes become real control chars (so `write` can create
+    // multi-line files); other escapes stay literal.
+    auto tokens = CommandRegistry::tokenize("write 0 \"a\\nb\\tc\"");
+    ASSERT_EQ(tokens.size(), 3u);
+    EXPECT_EQ(tokens[2], "a\nb\tc");
+}
+
 TEST(TokenizeTest, MixedQuotedAndUnquoted) {
     auto tokens = CommandRegistry::tokenize("cp \"source file\" dest");
     ASSERT_EQ(tokens.size(), 3u);
@@ -293,6 +301,84 @@ TEST(GlobTest, DirPrefixPreserved) {
     ASSERT_EQ(a.size(), 2u);
     EXPECT_EQ(a[0], "sub/a.txt");  // matches are re-prefixed with the dir part
     EXPECT_EQ(a[1], "sub/b.txt");
+}
+
+// --- Operation log / replay (C-05) ---
+
+static CmdHandler noop() {
+    return [](IFileSystem&, UserManager&, const std::vector<std::string>&,
+              std::string&) -> int { return 0; };
+}
+
+TEST(OpLogTest, RecordsExecutedCommands) {
+    CommandRegistry reg;
+    reg.register_cmd("a", noop(), "a");
+    reg.register_cmd("b", noop(), "b");
+    StubFs fs;
+    UserManager um;
+    std::string out;
+
+    reg.execute("a", fs, um, out);
+    reg.execute("b x y", fs, um, out);
+
+    ASSERT_EQ(reg.op_log().size(), 2u);
+    EXPECT_EQ(reg.op_log()[0].cmdline, "a");
+    EXPECT_EQ(reg.op_log()[1].cmdline, "b x y");  // raw line, replayable verbatim
+}
+
+TEST(OpLogTest, SkipsMetaCommands) {
+    CommandRegistry reg;
+    reg.register_cmd("log", noop(), "log");
+    reg.register_cmd("help", noop(), "help");
+    reg.register_cmd("mkdir", noop(), "mkdir");
+    StubFs fs;
+    UserManager um;
+    std::string out;
+
+    reg.execute("log", fs, um, out);
+    reg.execute("help", fs, um, out);
+    reg.execute("mkdir d", fs, um, out);
+
+    ASSERT_EQ(reg.op_log().size(), 1u);
+    EXPECT_EQ(reg.op_log()[0].cmdline, "mkdir d");
+}
+
+TEST(OpLogTest, ClearEmptiesLog) {
+    CommandRegistry reg;
+    reg.register_cmd("x", noop(), "x");
+    StubFs fs;
+    UserManager um;
+    std::string out;
+
+    reg.execute("x", fs, um, out);
+    ASSERT_EQ(reg.op_log().size(), 1u);
+    reg.clear_log();
+    EXPECT_TRUE(reg.op_log().empty());
+}
+
+TEST(OpLogTest, ReplayReExecutesWithoutGrowingLog) {
+    CommandRegistry reg;
+    int calls = 0;
+    reg.register_cmd(
+        "ping",
+        [&calls](IFileSystem&, UserManager&, const std::vector<std::string>&,
+                 std::string&) -> int {
+            ++calls;
+            return 0;
+        },
+        "ping");
+    StubFs fs;
+    UserManager um;
+    std::string out;
+
+    reg.execute("ping", fs, um, out);
+    reg.execute("ping", fs, um, out);
+    EXPECT_EQ(calls, 2);
+    ASSERT_EQ(reg.op_log().size(), 2u);
+
+    reg.replay(fs, um, out);
+    EXPECT_EQ(calls, 4);                 // replay re-ran both
+    EXPECT_EQ(reg.op_log().size(), 2u);  // ...but did not re-log them
 }
 
 }  // namespace

@@ -1,7 +1,11 @@
 #include "shell/command_registry.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
+#include <ctime>
+#include <fstream>
+#include <set>
 #include <stdexcept>
 
 #include "core/user_manager.h"
@@ -81,6 +85,9 @@ int CommandRegistry::execute(const std::string& cmdline, IFileSystem& fs, UserMa
                 }
             }
 
+            // Record the operation in the log (C-05) before running it.
+            record(cmd_name, cmdline, um);
+
             // Safety net: a handler must never crash the whole program. Several
             // commands parse numeric args with std::stoi/stoul, which throw on
             // non-numeric input (e.g. "close abc", "su alice" for an unknown
@@ -116,6 +123,72 @@ std::vector<std::pair<std::string, std::string>> CommandRegistry::list_commands(
     return result;
 }
 
+// ---- Operation log / replay (C-05) ----
+
+void CommandRegistry::set_log_path(const std::string& path) {
+    log_path_ = path;
+    // Load any existing log so it accumulates across sessions (and a prior
+    // session can be replayed). Format: "<unixtime>\t<user>\t<cmdline>".
+    std::ifstream in(path);
+    std::string line;
+    while (std::getline(in, line)) {
+        size_t t1 = line.find('\t');
+        if (t1 == std::string::npos) continue;
+        size_t t2 = line.find('\t', t1 + 1);
+        if (t2 == std::string::npos) continue;
+        LogEntry e;
+        e.time = static_cast<uint32_t>(std::strtoul(line.substr(0, t1).c_str(), nullptr, 10));
+        e.user = line.substr(t1 + 1, t2 - t1 - 1);
+        e.cmdline = line.substr(t2 + 1);  // rest of line — keeps embedded tabs
+        log_.push_back(std::move(e));
+    }
+}
+
+void CommandRegistry::clear_log() {
+    log_.clear();
+    if (!log_path_.empty()) {
+        std::ofstream out(log_path_, std::ios::trunc);  // truncate the file
+    }
+}
+
+void CommandRegistry::record(const std::string& cmd_name, const std::string& cmdline,
+                             UserManager& um) {
+    if (suppress_log_) return;  // don't re-log while replaying
+    // Meta-commands aren't "operations": skip them so the log stays focused and
+    // replaying can never recurse into itself.
+    static const std::set<std::string> skip = {"log", "replay", "help", "history", "exit"};
+    if (skip.count(cmd_name)) return;
+
+    LogEntry e;
+    e.time = static_cast<uint32_t>(std::time(nullptr));
+    e.user = um.is_logged_in() ? um.current_username() : "?";
+    e.cmdline = cmdline;
+    log_.push_back(e);
+
+    if (!log_path_.empty()) {
+        std::ofstream out(log_path_, std::ios::app);  // append + flush on close
+        if (out) out << e.time << '\t' << e.user << '\t' << e.cmdline << '\n';
+    }
+}
+
+int CommandRegistry::replay(IFileSystem& fs, UserManager& um, std::string& out) {
+    // Snapshot the command lines first: execute() runs with logging suppressed,
+    // but snapshotting also guards against the vector changing under us.
+    std::vector<std::string> cmds;
+    cmds.reserve(log_.size());
+    for (const auto& e : log_) cmds.push_back(e.cmdline);
+
+    suppress_log_ = true;
+    for (const auto& c : cmds) {
+        std::string discard;
+        execute(c, fs, um, discard);
+    }
+    suppress_log_ = false;
+
+    out = "Replayed " + std::to_string(cmds.size()) + " operation(s).";
+    return 0;
+}
+
 std::vector<CommandRegistry::Token> CommandRegistry::tokenize_ex(const std::string& cmdline) {
     std::vector<Token> tokens;
     size_t i = 0;
@@ -138,7 +211,14 @@ std::vector<CommandRegistry::Token> CommandRegistry::tokenize_ex(const std::stri
             ++i;  // skip opening quote
             while (i < n && cmdline[i] != '"') {
                 if (cmdline[i] == '\\' && i + 1 < n) {
-                    ++i;  // skip backslash, take next char literally
+                    ++i;  // consume backslash, interpret the escape
+                    switch (cmdline[i]) {
+                    case 'n': tok.text.push_back('\n'); break;
+                    case 't': tok.text.push_back('\t'); break;
+                    default: tok.text.push_back(cmdline[i]); break;  // \" \\ etc.
+                    }
+                    ++i;
+                    continue;
                 }
                 tok.text.push_back(cmdline[i]);
                 ++i;

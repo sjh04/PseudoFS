@@ -1,3 +1,6 @@
+#include <unistd.h>
+
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -285,7 +288,6 @@ static void register_commands(CommandRegistry& reg) {
                 out = "more: " + open_error(fs, args[0]);
                 return -1;
             }
-            // Read entire file, return with line count prefix
             std::vector<char> buf(65536, 0);
             ssize_t n = fs.fs_read(fd, buf.data(), buf.size() - 1);
             fs.fs_close(fd);
@@ -293,15 +295,12 @@ static void register_commands(CommandRegistry& reg) {
                 out = "more: read error";
                 return -1;
             }
-            std::string content(buf.data(), n);
-            int lines = 1;
-            for (auto c : content)
-                if (c == '\n') ++lines;
-            out = "--- more (" + std::to_string(lines) + " lines) ---\n" +
-                  content + "\n--- END ---";
+            // Hand the content to the caller's pager (TUI full-screen / CLI
+            // --More--) via the prefix, so it is shown one screen at a time.
+            out = std::string(PAGER_PREFIX) + std::string(buf.data(), n);
             return 0;
         },
-        "more <file> — view file content");
+        "more <file> — view file content one page at a time");
 
     reg.register_cmd(
         "find",
@@ -929,12 +928,93 @@ static void register_commands(CommandRegistry& reg) {
         "help — list all commands");
 
     reg.register_cmd(
+        "log",
+        [&reg](IFileSystem&, UserManager&, const std::vector<std::string>& args,
+               std::string& out) -> int {
+            if (!args.empty() && args[0] == "clear") {
+                reg.clear_log();
+                out = "Operation log cleared.";
+                return 0;
+            }
+            const auto& entries = reg.op_log();
+            if (entries.empty()) {
+                out = "(operation log empty)";
+                return 0;
+            }
+            out.clear();
+            for (size_t i = 0; i < entries.size(); ++i) {
+                char ts[24] = "-";
+                std::time_t t = static_cast<std::time_t>(entries[i].time);
+                std::tm* lt = std::localtime(&t);
+                if (lt) std::strftime(ts, sizeof(ts), "%m-%d %H:%M:%S", lt);
+                char head[48];
+                std::snprintf(head, sizeof(head), "%3zu  %s  %-8s  ", i + 1, ts,
+                              entries[i].user.c_str());
+                out += head;
+                out += entries[i].cmdline;
+                out += "\n";
+            }
+            while (!out.empty() && out.back() == '\n') out.pop_back();
+            return 0;
+        },
+        "log [clear] — show (or clear) the operation log");
+
+    reg.register_cmd(
+        "replay",
+        [&reg](IFileSystem& fs, UserManager& um, const std::vector<std::string>&,
+               std::string& out) -> int { return reg.replay(fs, um, out); },
+        "replay — re-run every logged operation in order");
+
+    reg.register_cmd(
         "exit",
         [](IFileSystem&, UserManager&, const std::vector<std::string>&, std::string& out) -> int {
             out = "__EXIT__";
             return 0;
         },
         "exit — quit PseudoFS");
+}
+
+// CLI pager for `more`. Interactively (a TTY) shows `content` one screen at a
+// time with an --More-- prompt; when piped/redirected it just dumps everything
+// so scripts and tests are unaffected.
+static void cli_page(const std::string& content) {
+    if (!isatty(fileno(stdin))) {
+        std::fwrite(content.data(), 1, content.size(), stdout);
+        if (!content.empty() && content.back() != '\n') std::printf("\n");
+        return;
+    }
+    std::vector<std::string> lines;
+    std::string cur;
+    for (char c : content) {
+        if (c == '\n') {
+            lines.push_back(cur);
+            cur.clear();
+        } else if (c != '\r') {
+            cur.push_back(c);
+        }
+    }
+    lines.push_back(cur);
+    if (lines.size() > 1 && lines.back().empty()) lines.pop_back();
+
+    const int page = 20;
+    const int total = static_cast<int>(lines.size());
+    for (int top = 0; top < total; top += page) {
+        for (int i = top; i < top + page && i < total; ++i)
+            std::printf("%s\n", lines[i].c_str());
+        if (top + page >= total) break;
+        std::printf("\033[7m--More-- (%d/%d) [Enter=more, q=quit]\033[0m",
+                    std::min(top + page, total), total);
+        std::fflush(stdout);
+        int c = std::getchar();
+        if (c != '\n' && c != EOF) {
+            while (true) {  // swallow the rest of the input line
+                int d = std::getchar();
+                if (d == '\n' || d == EOF) break;
+            }
+        }
+        std::printf("\r\033[K");  // erase the --More-- prompt
+        if (c == 'q' || c == 'Q' || c == EOF) break;
+    }
 }
 
 int main(int argc, char* argv[]) {
@@ -950,6 +1030,7 @@ int main(int argc, char* argv[]) {
 
     CommandRegistry reg;
     register_commands(reg);
+    reg.set_log_path("pfs_ops.log");  // persistent operation log (C-05)
 
     UserManager um;
     if (!force_format) um.load_from_file(USERS_FILE);  // restore prior accounts
@@ -1060,7 +1141,10 @@ int main(int argc, char* argv[]) {
         int ret = reg.execute(input, *fs, um, output);
 
         if (output == "__EXIT__") break;
-        if (!output.empty()) {
+        const std::string pager(PAGER_PREFIX);
+        if (output.rfind(pager, 0) == 0) {
+            cli_page(output.substr(pager.size()));  // `more`: paged display
+        } else if (!output.empty()) {
             if (ret != 0)
                 std::printf("\033[31m%s\033[0m\n", output.c_str());
             else

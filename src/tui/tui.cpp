@@ -323,6 +323,79 @@ void Tui::switch_fs() {
     std::swap(fs_, alt_fs_);
 }
 
+// ------- Pager (`more`) -------
+
+void Tui::page_content(Windows& w, const std::string& content) {
+    // Split into logical lines (the last one even if empty).
+    std::vector<std::string> lines;
+    std::string cur;
+    for (char c : content) {
+        if (c == '\n') {
+            lines.push_back(cur);
+            cur.clear();
+        } else if (c != '\r') {
+            cur.push_back(c);
+        }
+    }
+    lines.push_back(cur);
+    // Files usually end in '\n', leaving a spurious trailing blank line.
+    if (lines.size() > 1 && lines.back().empty()) lines.pop_back();
+
+    WINDOW* pw = newwin(w.max_y, w.max_x, 0, 0);
+    keypad(pw, TRUE);
+
+    const int page_h = (w.max_y > 2) ? w.max_y - 1 : 1;  // bottom row = status
+    const int total = static_cast<int>(lines.size());
+    const int max_top = (total > page_h) ? total - page_h : 0;
+    int top = 0;
+
+    bool quit = false;
+    while (!quit) {
+        werase(pw);
+        for (int i = 0; i < page_h && top + i < total; ++i) {
+            std::string ln = lines[top + i];
+            if (static_cast<int>(ln.size()) > w.max_x - 1)
+                ln = ln.substr(0, w.max_x - 1);  // truncate to avoid line wrap
+            mvwprintw(pw, i, 0, "%s", ln.c_str());
+        }
+        int last = std::min(top + page_h, total);
+        wattron(pw, A_REVERSE);
+        mvwprintw(pw, w.max_y - 1, 0,
+                  " more: %d-%d/%d   [Space/PgDn page  up/down line  b/PgUp back"
+                  "  q quit] ",
+                  total ? top + 1 : 0, last, total);
+        wattroff(pw, A_REVERSE);
+        wrefresh(pw);
+
+        switch (wgetch(pw)) {
+        case ' ':
+        case KEY_NPAGE:
+            top = std::min(top + page_h, max_top);
+            break;
+        case KEY_DOWN:
+        case '\n':
+        case KEY_ENTER:
+            top = std::min(top + 1, max_top);
+            break;
+        case 'b':
+        case 'B':
+        case KEY_PPAGE:
+            top = std::max(top - page_h, 0);
+            break;
+        case KEY_UP:
+            top = std::max(top - 1, 0);
+            break;
+        case 'q':
+        case 'Q':
+            quit = true;
+            break;
+        default:
+            break;
+        }
+    }
+    delwin(pw);
+}
+
 // ------- Main loop -------
 
 void Tui::run() {
@@ -418,6 +491,17 @@ void Tui::run() {
 
             if (output == "__EXIT__") {
                 running_ = false;
+                break;
+            }
+
+            // `more` returns its content behind PAGER_PREFIX — show it in the
+            // full-screen pager, then restore the main screen.
+            const std::string pager(PAGER_PREFIX);
+            if (output.rfind(pager, 0) == 0) {
+                page_content(w, strip_ansi(output.substr(pager.size())));
+                input_buf.clear();
+                redraw_all(w, input_buf);
+                refresh();
                 break;
             }
 
