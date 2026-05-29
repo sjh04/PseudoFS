@@ -72,6 +72,15 @@ int CommandRegistry::execute(const std::string& cmdline, IFileSystem& fs, UserMa
 
     for (const auto& [name, entry] : commands_) {
         if (name == cmd_name) {
+            // "-h" / "--help" on any command prints its usage instead of
+            // running it — gives every command a help switch for free (C-04).
+            for (const auto& a : args) {
+                if (a == "-h" || a == "--help") {
+                    output = "Usage: " + entry.usage;
+                    return 0;
+                }
+            }
+
             // Safety net: a handler must never crash the whole program. Several
             // commands parse numeric args with std::stoi/stoul, which throw on
             // non-numeric input (e.g. "close abc", "su alice" for an unknown

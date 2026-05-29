@@ -183,6 +183,35 @@ TEST(CommandRegistryTest, ExecuteCatchesGenericException) {
     EXPECT_EQ(output, "boom: error: kaboom");
 }
 
+// --- Per-command help (-h / --help) ---
+
+TEST(CommandRegistryTest, DashHPrintsUsageWithoutRunning) {
+    CommandRegistry reg;
+    bool ran = false;
+    reg.register_cmd(
+        "greet",
+        [&ran](IFileSystem&, UserManager&, const std::vector<std::string>&,
+               std::string& out) -> int {
+            ran = true;
+            out = "hello";
+            return 0;
+        },
+        "greet [name]");
+
+    StubFs fs;
+    UserManager um;
+    std::string out;
+
+    EXPECT_EQ(reg.execute("greet -h", fs, um, out), 0);
+    EXPECT_EQ(out, "Usage: greet [name]");
+    EXPECT_FALSE(ran);  // help short-circuits the handler
+
+    out.clear();
+    EXPECT_EQ(reg.execute("greet --help", fs, um, out), 0);
+    EXPECT_EQ(out, "Usage: greet [name]");
+    EXPECT_FALSE(ran);
+}
+
 // --- Wildcard (glob) expansion ---
 
 // A stub whose directory always contains the same three entries, returned out

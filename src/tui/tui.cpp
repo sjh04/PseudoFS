@@ -606,44 +606,64 @@ void Tui::run() {
             refresh();
             break;
         }
-        case '\t': {  // Tab — filename completion
-            // Find the last word (after last space)
+        case '\t': {  // Tab — complete the command name (first word) or a filename
             size_t last_space = input_buf.rfind(' ');
-            std::string prefix =
-                (last_space == std::string::npos)
-                    ? input_buf
-                    : input_buf.substr(last_space + 1);
+            std::string prefix = (last_space == std::string::npos)
+                                     ? input_buf
+                                     : input_buf.substr(last_space + 1);
             if (prefix.empty()) break;
 
-            // Get current directory listing
-            std::vector<DirEntry> entries;
-            if (fs_->fs_ls("", entries) == 0) {
-                std::vector<std::string> matches;
-                for (auto& e : entries) {
-                    std::string name(e.name);
-                    if (name.size() >= prefix.size() &&
-                        name.compare(0, prefix.size(), prefix) == 0) {
-                        matches.push_back(name);
+            std::vector<std::string> matches;
+            if (last_space == std::string::npos) {
+                // First word → complete against registered command names.
+                for (auto& c : reg_->list_commands()) {
+                    if (c.first.size() >= prefix.size() &&
+                        c.first.compare(0, prefix.size(), prefix) == 0) {
+                        matches.push_back(c.first);
                     }
                 }
-                if (matches.size() == 1) {
-                    // Single match: complete
-                    std::string suffix = matches[0].substr(prefix.size());
-                    input_buf += suffix;
-                    wprintw(w.term_win, "%s", suffix.c_str());
-                    wrefresh(w.term_win);
-                } else if (matches.size() > 1) {
-                    // Multiple: show options
-                    wprintw(w.term_win,
-                            "\n");
-                    for (auto& m : matches) {
-                        wprintw(w.term_win, "  %s", m.c_str());
+            } else {
+                // Argument → complete against entries in the current directory.
+                std::vector<DirEntry> entries;
+                if (fs_->fs_ls("", entries) == 0) {
+                    for (auto& e : entries) {
+                        std::string name(e.name);
+                        if (name.size() >= prefix.size() &&
+                            name.compare(0, prefix.size(), prefix) == 0) {
+                            matches.push_back(name);
+                        }
                     }
-                    wprintw(w.term_win, "\n");
-                    draw_prompt(w);
-                    wprintw(w.term_win, "%s", input_buf.c_str());
-                    wrefresh(w.term_win);
                 }
+            }
+            if (matches.empty()) break;
+
+            // Extend input to the longest common prefix of all matches: a unique
+            // candidate finishes the word; an ambiguous one fills in as far as it
+            // unambiguously can.
+            std::string common = matches[0];
+            for (size_t i = 1; i < matches.size(); ++i) {
+                size_t k = 0;
+                while (k < common.size() && k < matches[i].size() &&
+                       common[k] == matches[i][k]) {
+                    ++k;
+                }
+                common.resize(k);
+            }
+            if (common.size() > prefix.size()) {
+                std::string suffix = common.substr(prefix.size());
+                input_buf += suffix;
+                wprintw(w.term_win, "%s", suffix.c_str());
+                wrefresh(w.term_win);
+            }
+
+            // Still ambiguous → list all candidates, then redraw prompt+input.
+            if (matches.size() > 1) {
+                wprintw(w.term_win, "\n");
+                for (auto& m : matches) wprintw(w.term_win, "  %s", m.c_str());
+                wprintw(w.term_win, "\n");
+                draw_prompt(w);
+                wprintw(w.term_win, "%s", input_buf.c_str());
+                wrefresh(w.term_win);
             }
             break;
         }
