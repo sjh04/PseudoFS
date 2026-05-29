@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <ctime>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -26,7 +27,38 @@ struct Tui::Windows {
 
 static void draw_box_title(WINDOW* win, const char* title) {
     box(win, 0, 0);
+    wattron(win, A_BOLD);
     mvwprintw(win, 0, 1, " %s ", title);
+    wattroff(win, A_BOLD);
+}
+
+// Draw "Label ████▒▒▒▒ used/total (pct%)" using ACS block glyphs. The filled
+// portion is colored by fullness (green < 70%, yellow < 90%, red otherwise).
+static void draw_meter(WINDOW* win, int y, int x, const char* label, int width,
+                       uint32_t used, uint32_t total) {
+    if (width < 1) width = 1;
+    int filled = (total > 0)
+                     ? static_cast<int>(static_cast<uint64_t>(used) * width / total)
+                     : 0;
+    if (filled > width) filled = width;
+    int pct = (total > 0)
+                  ? static_cast<int>(static_cast<uint64_t>(used) * 100 / total)
+                  : 0;
+    int fill_pair = (pct >= 90) ? 5 : (pct >= 70 ? 3 : 1);  // red / yellow / green
+
+    mvwprintw(win, y, x, "%-6s ", label);
+    for (int i = 0; i < width; ++i) {
+        if (i < filled) {
+            wattron(win, COLOR_PAIR(fill_pair));
+            waddch(win, ACS_BLOCK);
+            wattroff(win, COLOR_PAIR(fill_pair));
+        } else {
+            wattron(win, COLOR_PAIR(4));
+            waddch(win, ACS_CKBOARD);
+            wattroff(win, COLOR_PAIR(4));
+        }
+    }
+    wprintw(win, " %u/%u (%d%%)", used, total, pct);
 }
 
 static int tree_h(int max_y) { return max_y * 0.55; }
@@ -36,43 +68,62 @@ static int disk_w(int max_x) { return max_x - tree_w(max_x); }
 
 // ------- Helper: recursive tree walk -------
 
-static void walk_tree(IFileSystem& fs, const std::string& path,
-                      int depth, int& line, int max_lines,
-                      WINDOW* win) {
-    if (depth > 6 || line >= max_lines) return;
+static void walk_tree(IFileSystem& fs, const std::string& path, int& line,
+                      int max_lines, WINDOW* win, std::vector<bool>& ancestors) {
+    if (ancestors.size() > 6 || line >= max_lines) return;
 
     std::vector<DirEntry> entries;
     if (fs.fs_ls(path.c_str(), entries) != 0) return;
-    if (entries.empty()) return;
 
-    // Sort: dirs first, then alphabetically
-    std::sort(entries.begin(), entries.end(),
+    // Drop "." / ".." so last-child detection (the └─ glyph) is correct.
+    std::vector<DirEntry> kids;
+    for (auto& e : entries) {
+        if (std::strcmp(e.name, ".") == 0) continue;
+        if (std::strcmp(e.name, "..") == 0) continue;
+        kids.push_back(e);
+    }
+    // Sort: dirs first, then alphabetically.
+    std::sort(kids.begin(), kids.end(),
               [](const DirEntry& a, const DirEntry& b) {
                   if (a.type != b.type) return a.type > b.type;
                   return std::string(a.name) < std::string(b.name);
               });
 
-    std::string indent(depth * 2, ' ');
-
-    for (auto& e : entries) {
+    for (size_t i = 0; i < kids.size(); ++i) {
         if (line >= max_lines) return;
-        if (std::strcmp(e.name, ".") == 0) continue;
-        if (std::strcmp(e.name, "..") == 0) continue;
+        const DirEntry& e = kids[i];
+        bool last = (i + 1 == kids.size());
+
+        // Branch prefix: a vertical bar for each ancestor that has more
+        // siblings below, then the ├─ / └─ connector for this entry.
+        wmove(win, line, 1);
+        wattron(win, COLOR_PAIR(4));
+        for (bool ancestor_more : ancestors) {
+            waddch(win, ancestor_more ? ACS_VLINE : ' ');
+            waddstr(win, "  ");
+        }
+        waddch(win, last ? ACS_LLCORNER : ACS_LTEE);
+        waddch(win, ACS_HLINE);
+        waddch(win, ' ');
+        wattroff(win, COLOR_PAIR(4));
 
         if (e.type == TYPE_DIR) {
-            wattron(win, COLOR_PAIR(1));
-            mvwprintw(win, line++, 1, "%s%s/", indent.c_str(), e.name);
-            wattroff(win, COLOR_PAIR(1));
+            wattron(win, COLOR_PAIR(1) | A_BOLD);
+            wprintw(win, "%s/", e.name);
+            wattroff(win, COLOR_PAIR(1) | A_BOLD);
         } else {
             wattron(win, COLOR_PAIR(3));
-            mvwprintw(win, line++, 1, "%s%s", indent.c_str(), e.name);
+            wprintw(win, "%s", e.name);
             wattroff(win, COLOR_PAIR(3));
         }
+        ++line;
 
-        if (e.type == TYPE_DIR && depth < 5) {
+        if (e.type == TYPE_DIR && ancestors.size() < 5) {
             std::string child = (path == "/") ? "/" + std::string(e.name)
                                               : path + "/" + std::string(e.name);
-            walk_tree(fs, child, depth + 1, line, max_lines, win);
+            ancestors.push_back(!last);
+            walk_tree(fs, child, line, max_lines, win, ancestors);
+            ancestors.pop_back();
         }
     }
 }
@@ -90,11 +141,24 @@ Tui::~Tui() { delete win_; }
 
 void Tui::draw_title(Windows& w) {
     wbkgd(w.title_bar, COLOR_PAIR(2));
+    werase(w.title_bar);  // clear stale text (e.g. longer username) to the bg
     std::string user = um_->is_logged_in() ? um_->current_username() : "nobody";
     std::string fs_type = fs_->fs_type_name();
-    mvwprintw(w.title_bar, 0, 1,
-              " PFS v2.0 | %s | user: %s | F1 Help  F2 SwitchFS  F3 DiskMap  F10 Exit ",
-              fs_type.c_str(), user.c_str());
+
+    char clock[16] = "";
+    std::time_t now = std::time(nullptr);
+    std::tm* lt = std::localtime(&now);
+    if (lt) std::strftime(clock, sizeof(clock), "%H:%M:%S", lt);
+
+    wattron(w.title_bar, A_BOLD);
+    mvwprintw(w.title_bar, 0, 1, " PFS v2.0 ");
+    wattroff(w.title_bar, A_BOLD);
+    wprintw(w.title_bar, "| %s | user: %s | %s ", fs_type.c_str(), user.c_str(),
+            clock);
+    // Right-aligned hint keys.
+    const char* keys = "F1 Help  F2 Switch  F3 Map  F10 Exit ";
+    int kx = w.max_x - static_cast<int>(std::strlen(keys)) - 1;
+    if (kx > getcurx(w.title_bar) + 1) mvwprintw(w.title_bar, 0, kx, "%s", keys);
     wrefresh(w.title_bar);
 }
 
@@ -104,10 +168,18 @@ void Tui::draw_tree(Windows& w, int start_line, int max_lines) {
 
     int line = start_line;
     std::string root = fs_->fs_pwd();
-    walk_tree(*fs_, root, 0, line, max_lines, w.tree_win);
+    // Current directory as the tree root.
+    wattron(w.tree_win, COLOR_PAIR(4) | A_BOLD);
+    mvwprintw(w.tree_win, line++, 1, "%s", root.c_str());
+    wattroff(w.tree_win, COLOR_PAIR(4) | A_BOLD);
 
-    if (line == start_line) {
-        mvwprintw(w.tree_win, line, 1, "(empty)");
+    std::vector<bool> ancestors;
+    walk_tree(*fs_, root, line, max_lines, w.tree_win, ancestors);
+
+    if (line == start_line + 1) {
+        wattron(w.tree_win, COLOR_PAIR(4));
+        mvwprintw(w.tree_win, line, 3, "(empty)");
+        wattroff(w.tree_win, COLOR_PAIR(4));
     }
     wrefresh(w.tree_win);
 }
@@ -119,53 +191,60 @@ void Tui::draw_disk(Windows& w, int start_line) {
     DiskUsage du = fs_->fs_disk_usage();
     int line = start_line;
 
-    mvwprintw(w.disk_win, line++, 2, "FS: %s", fs_->fs_type_name().c_str());
-    mvwprintw(w.disk_win, line++, 2, "Blocks: %u / %u", du.used_blocks,
-              du.total_blocks);
+    wattron(w.disk_win, A_BOLD);
+    mvwprintw(w.disk_win, line++, 2, "%s engine", fs_->fs_type_name().c_str());
+    wattroff(w.disk_win, A_BOLD);
+    line++;
 
-    // Draw block usage bar (scaled to fit)
-    int bar_w = disk_w(w.max_x) - 4;
-    if (bar_w < 10) bar_w = 10;
-    int used_w = (du.total_blocks > 0)
-                     ? (du.used_blocks * bar_w / du.total_blocks)
-                     : 0;
-    mvwprintw(w.disk_win, line++, 2, "[");
-    for (int i = 0; i < bar_w; ++i) {
-        if (i < used_w)
-            wattron(w.disk_win, COLOR_PAIR(5));
-        else
-            wattron(w.disk_win, COLOR_PAIR(4));
-        wprintw(w.disk_win, (i < used_w) ? "#" : "-");
-        if (i < used_w)
-            wattroff(w.disk_win, COLOR_PAIR(5));
-        else
-            wattroff(w.disk_win, COLOR_PAIR(4));
-    }
-    wprintw(w.disk_win, "]");
+    int bar_w = disk_w(w.max_x) - 22;
+    if (bar_w < 8) bar_w = 8;
 
+    draw_meter(w.disk_win, line++, 2, "Block", bar_w, du.used_blocks,
+               du.total_blocks);
     if (du.total_inodes > 0) {
-        line++;
-        mvwprintw(w.disk_win, line++, 2, "INodes: %u / %u", du.used_inodes,
-                  du.total_inodes);
+        draw_meter(w.disk_win, line++, 2, "INode", bar_w, du.used_inodes,
+                   du.total_inodes);
     }
+
+    line++;
+    wattron(w.disk_win, COLOR_PAIR(4));
+    mvwprintw(w.disk_win, line, 2, "Press F3 for the full block map");
+    wattroff(w.disk_win, COLOR_PAIR(4));
 
     wrefresh(w.disk_win);
 }
 
 void Tui::draw_status(Windows& w) {
-    wattron(w.status_bar, COLOR_PAIR(2));
-    mvwprintw(w.status_bar, 0, 0,
-              " F1 Help | F2 SwitchFS | F3 DiskMap | F5 Refresh | F10 Exit ");
-    wattroff(w.status_bar, COLOR_PAIR(2));
+    wbkgd(w.status_bar, COLOR_PAIR(2));
+    werase(w.status_bar);
+    struct {
+        const char* key;
+        const char* desc;
+    } items[] = {{"F1", "Help"},   {"F2", "Switch"}, {"F3", "DiskMap"},
+                 {"F5", "Refresh"}, {"F10", "Exit"}};
+    wmove(w.status_bar, 0, 1);
+    for (const auto& it : items) {
+        wattron(w.status_bar, A_BOLD);
+        wprintw(w.status_bar, " %s", it.key);
+        wattroff(w.status_bar, A_BOLD);
+        wprintw(w.status_bar, " %s ", it.desc);
+    }
     wrefresh(w.status_bar);
 }
 
 void Tui::draw_prompt(Windows& w) {
     std::string user = um_->is_logged_in() ? um_->current_username() : "?";
     std::string path = fs_ ? fs_->fs_pwd() : "/";
-    wattron(w.term_win, COLOR_PAIR(1));
-    wprintw(w.term_win, "%s@PFS:%s $ ", user.c_str(), path.c_str());
+    wattron(w.term_win, COLOR_PAIR(4) | A_BOLD);  // user in cyan
+    wprintw(w.term_win, "%s", user.c_str());
+    wattroff(w.term_win, COLOR_PAIR(4) | A_BOLD);
+    wprintw(w.term_win, "@PFS:");
+    wattron(w.term_win, COLOR_PAIR(1));  // path in green
+    wprintw(w.term_win, "%s", path.c_str());
     wattroff(w.term_win, COLOR_PAIR(1));
+    wattron(w.term_win, A_BOLD);
+    wprintw(w.term_win, " $ ");
+    wattroff(w.term_win, A_BOLD);
 }
 
 void Tui::redraw_all(Windows& w, const std::string& input_buf) {
@@ -223,6 +302,7 @@ void Tui::run() {
 
     keypad(w.term_win, TRUE);
     scrollok(w.term_win, TRUE);
+    wtimeout(w.term_win, 1000);  // wake every 1s so the title clock ticks
 
     std::string input_buf;
     std::vector<std::string> cmd_history;
@@ -253,6 +333,11 @@ void Tui::run() {
     running_ = true;
     while (running_) {
         int ch = wgetch(w.term_win);
+
+        if (ch == ERR) {  // 1s timeout, no key: refresh the clock and keep waiting
+            draw_title(w);
+            continue;
+        }
 
         switch (ch) {
         case '\n':
@@ -388,19 +473,19 @@ void Tui::run() {
                 if (row - top >= max_rows) break;
                 int col = 2 + static_cast<int>(i) % cols;
                 int pair;
-                char ch;
+                chtype glyph;
                 if (bmap[i] == BLK_USED) {
-                    pair = 5;
-                    ch = '#';
+                    pair = 5;  // red solid
+                    glyph = ACS_BLOCK;
                 } else if (bmap[i] == BLK_META) {
-                    pair = 4;
-                    ch = 'M';
+                    pair = 4;  // cyan solid
+                    glyph = ACS_BLOCK;
                 } else {
-                    pair = 1;
-                    ch = '.';
+                    pair = 1;  // green stipple
+                    glyph = ACS_CKBOARD;
                 }
                 wattron(dw, COLOR_PAIR(pair));
-                mvwaddch(dw, row, col, ch);
+                mvwaddch(dw, row, col, glyph);
                 wattroff(dw, COLOR_PAIR(pair));
                 ++drawn;
             }
@@ -408,16 +493,17 @@ void Tui::run() {
             int ly = w.max_y - 2;
             mvwprintw(dw, ly - 1, 2, "Legend:  ");
             wattron(dw, COLOR_PAIR(5));
-            wprintw(dw, "# used");
+            waddch(dw, ACS_BLOCK);
             wattroff(dw, COLOR_PAIR(5));
-            wprintw(dw, "   ");
+            wprintw(dw, " used    ");
             wattron(dw, COLOR_PAIR(1));
-            wprintw(dw, ". free");
+            waddch(dw, ACS_CKBOARD);
             wattroff(dw, COLOR_PAIR(1));
-            wprintw(dw, "   ");
+            wprintw(dw, " free    ");
             wattron(dw, COLOR_PAIR(4));
-            wprintw(dw, "M meta");
+            waddch(dw, ACS_BLOCK);
             wattroff(dw, COLOR_PAIR(4));
+            wprintw(dw, " meta");
             mvwprintw(dw, ly, 2,
                       "used=%d  free=%d  meta=%d%s   Press any key to close",
                       used, freeb, meta,
@@ -456,6 +542,7 @@ void Tui::run() {
             w.status_bar = newwin(1, w.max_x, w.max_y - 1, 0);
             keypad(w.term_win, TRUE);
             scrollok(w.term_win, TRUE);
+            wtimeout(w.term_win, 1000);
             redraw_all(w, input_buf);
             refresh();
             break;
