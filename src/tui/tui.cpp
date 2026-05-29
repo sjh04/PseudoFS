@@ -19,7 +19,8 @@ struct Tui::Windows {
     WINDOW* title_bar;
     WINDOW* tree_win;
     WINDOW* disk_win;
-    WINDOW* term_win;
+    WINDOW* term_box;  // bordered outer window for the terminal panel
+    WINDOW* term_win;  // inner content window (derwin) — scrolls without touching the box
     WINDOW* status_bar;
     int max_y;
     int max_x;
@@ -65,6 +66,25 @@ static int tree_h(int max_y) { return max_y * 0.55; }
 static int term_h(int max_y) { return max_y - tree_h(max_y) - 2; }
 static int tree_w(int max_x) { return max_x * 0.4; }
 static int disk_w(int max_x) { return max_x - tree_w(max_x); }
+
+// Strip ANSI CSI escape sequences (e.g. ls's "\033[32m") from a string. The
+// shell colors some output with ANSI codes for CLI mode; ncurses would print
+// them literally, so drop them before showing output in the TUI terminal.
+static std::string strip_ansi(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\033' && i + 1 < s.size() && s[i + 1] == '[') {
+            i += 2;
+            // Skip parameter/intermediate bytes; stop on the final byte (0x40-0x7E).
+            while (i < s.size() && (s[i] < 0x40 || s[i] > 0x7E)) ++i;
+            // The final byte is consumed by the loop's ++i.
+        } else {
+            out.push_back(s[i]);
+        }
+    }
+    return out;
+}
 
 // ------- Helper: recursive tree walk -------
 
@@ -297,7 +317,8 @@ void Tui::run() {
     w.title_bar = newwin(1, w.max_x, 0, 0);
     w.tree_win = newwin(tree_h(w.max_y), tree_w(w.max_x), 1, 0);
     w.disk_win = newwin(tree_h(w.max_y), disk_w(w.max_x), 1, tree_w(w.max_x));
-    w.term_win = newwin(term_h(w.max_y), w.max_x, 1 + tree_h(w.max_y), 0);
+    w.term_box = newwin(term_h(w.max_y), w.max_x, 1 + tree_h(w.max_y), 0);
+    w.term_win = derwin(w.term_box, term_h(w.max_y) - 2, w.max_x - 2, 1, 1);
     w.status_bar = newwin(1, w.max_x, w.max_y - 1, 0);
 
     keypad(w.term_win, TRUE);
@@ -318,11 +339,18 @@ void Tui::run() {
         wprintw(w.term_win, "%s", input_buf.c_str());
     };
 
+    // Paint the blank stdscr once up front. The first stdscr refresh marks
+    // every line dirty, so if it ran after the panels were drawn it would wipe
+    // them (leaving only the clock-ticked title bar). Do it first; the panel
+    // wrefresh() calls below then win, and later refresh()es are no-ops.
+    refresh();
+
     // Initial draw
     draw_title(w);
     draw_box_title(w.tree_win, "Directory Tree");
     draw_box_title(w.disk_win, "Disk Usage");
-    draw_box_title(w.term_win, " Terminal ");
+    draw_box_title(w.term_box, " Terminal ");
+    wrefresh(w.term_box);
     draw_prompt(w);
     wrefresh(w.term_win);
     draw_status(w);
@@ -346,9 +374,9 @@ void Tui::run() {
             cmd_history.push_back(input_buf);
             history_idx = -1;
 
-            wattron(w.term_win, COLOR_PAIR(3));
-            wprintw(w.term_win, "%s\n", input_buf.c_str());
-            wattroff(w.term_win, COLOR_PAIR(3));
+            // The command text was already echoed live as it was typed, so
+            // just advance to the next line (reprinting it would double it).
+            wprintw(w.term_win, "\n");
 
             std::string output;
             int ret = reg_->execute(input_buf, *fs_, *um_, output);
@@ -358,12 +386,13 @@ void Tui::run() {
                 break;
             }
 
-            if (ret != 0 && !output.empty()) {
+            std::string shown = strip_ansi(output);
+            if (ret != 0 && !shown.empty()) {
                 wattron(w.term_win, COLOR_PAIR(5));
-                wprintw(w.term_win, "  %s\n", output.c_str());
+                wprintw(w.term_win, "  %s\n", shown.c_str());
                 wattroff(w.term_win, COLOR_PAIR(5));
-            } else if (!output.empty()) {
-                wprintw(w.term_win, "  %s\n", output.c_str());
+            } else if (!shown.empty()) {
+                wprintw(w.term_win, "  %s\n", shown.c_str());
             }
 
             // Refresh the side panels so the tree / disk / title reflect what
@@ -527,7 +556,8 @@ void Tui::run() {
             delwin(w.title_bar);
             delwin(w.tree_win);
             delwin(w.disk_win);
-            delwin(w.term_win);
+            delwin(w.term_win);  // inner derwin before its parent
+            delwin(w.term_box);
             delwin(w.status_bar);
             endwin();
             refresh();
@@ -537,8 +567,12 @@ void Tui::run() {
                 newwin(tree_h(w.max_y), tree_w(w.max_x), 1, 0);
             w.disk_win = newwin(tree_h(w.max_y), disk_w(w.max_x), 1,
                                 tree_w(w.max_x));
-            w.term_win =
+            w.term_box =
                 newwin(term_h(w.max_y), w.max_x, 1 + tree_h(w.max_y), 0);
+            draw_box_title(w.term_box, " Terminal ");
+            wrefresh(w.term_box);
+            w.term_win = derwin(w.term_box, term_h(w.max_y) - 2,
+                                w.max_x - 2, 1, 1);
             w.status_bar = newwin(1, w.max_x, w.max_y - 1, 0);
             keypad(w.term_win, TRUE);
             scrollok(w.term_win, TRUE);
@@ -601,7 +635,8 @@ void Tui::run() {
     delwin(w.title_bar);
     delwin(w.tree_win);
     delwin(w.disk_win);
-    delwin(w.term_win);
+    delwin(w.term_win);  // inner derwin before its parent
+    delwin(w.term_box);
     delwin(w.status_bar);
     delete win_;
     win_ = nullptr;
