@@ -273,6 +273,17 @@ void Tui::redraw_all(Windows& w, const std::string& input_buf) {
     draw_tree(w, 1, inner_h);
     draw_disk(w, 1);
     draw_status(w);
+
+    // A popup (F1 Help / F3 Disk Map) overpaints the terminal box and its
+    // scrollback. The tree/disk panels above repaint via werase, but the
+    // terminal region is only restored if we force it: redraw the box border
+    // and touch the box so ncurses repaints the whole region — including the
+    // inner cells, which term_win shares (it is a derwin of term_box) — from
+    // the buffer rather than assuming the screen still matches.
+    draw_box_title(w.term_box, " Terminal ");
+    touchwin(w.term_box);
+    wrefresh(w.term_box);
+
     // Term prompt
     int y, x;
     getyx(w.term_win, y, x);
@@ -280,6 +291,7 @@ void Tui::redraw_all(Windows& w, const std::string& input_buf) {
     wclrtoeol(w.term_win);
     draw_prompt(w);
     wprintw(w.term_win, "%s", input_buf.c_str());
+    touchwin(w.term_win);
     wrefresh(w.term_win);
 }
 
@@ -451,6 +463,11 @@ void Tui::run() {
             int py = (w.max_y - popup_h) / 2;
             int px = (w.max_x - popup_w) / 2;
             WINDOW* hw = newwin(popup_h, popup_w, py, px);
+            // Enable keypad so a function key (e.g. F1 to close) is read as one
+            // KEY_F(1) token. Without it, F1's "\033OP" escape sequence leaks:
+            // wgetch returns the bare ESC and the leftover "OP" bytes fall
+            // through to the main loop and get typed into the command line.
+            keypad(hw, TRUE);
             draw_box_title(hw, " Help ");
             auto cmds = reg_->list_commands();
             int l = 1;
