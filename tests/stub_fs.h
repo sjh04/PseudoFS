@@ -34,6 +34,8 @@ class StubFs : public IFileSystem {
     int fs_stat(const char*, FileStat&) override { return 0; }
     int fs_chmod(const char*, uint16_t) override { return 0; }
     int fs_link(const char*, const char*) override { return 0; }
+    int fs_symlink(const char*, const char*) override { return 0; }
+    int fs_readlink(const char*, std::string&) override { return 0; }
 
     std::string fs_type_name() const override { return "STUB"; }
     DiskUsage fs_disk_usage() const override { return {}; }

@@ -37,6 +37,8 @@ class UnixFs : public IFileSystem {
     int fs_stat(const char* path, FileStat& out) override;
     int fs_chmod(const char* path, uint16_t mode) override;
     int fs_link(const char* src, const char* dst) override;
+    int fs_symlink(const char* target, const char* linkpath) override;
+    int fs_readlink(const char* path, std::string& out) override;
 
     std::string fs_type_name() const override;
     DiskUsage fs_disk_usage() const override;
@@ -69,6 +71,14 @@ class UnixFs : public IFileSystem {
     uint16_t user_slot_;
 
     bool check_access(MemINode* ip, uint8_t required);
+
+    // Resolve a path to an inode, following a trailing symlink (up to a small
+    // hop limit, so cycles/broken links fail rather than loop). Used by the
+    // operations that should act on a link's target (open, chdir).
+    uint16_t namei_follow(const char* path);
+
+    // Read a symlink inode's stored target path from its first data block.
+    std::string read_link_target(MemINode* ip);
 };
 
 }  // namespace pfs

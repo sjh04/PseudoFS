@@ -12,6 +12,7 @@ constexpr int O_APPEND = 4;
 
 constexpr uint8_t TYPE_FILE = 0;
 constexpr uint8_t TYPE_DIR = 1;
+constexpr uint8_t TYPE_SYMLINK = 2;
 
 // Per-block status categories returned by fs_block_map() for the disk view.
 constexpr uint8_t BLK_FREE = 0;  // allocatable, currently unused
@@ -72,6 +73,12 @@ class IFileSystem {
     virtual int fs_stat(const char* path, FileStat& out) = 0;
     virtual int fs_chmod(const char* path, uint16_t mode) = 0;
     virtual int fs_link(const char* src, const char* dst) = 0;
+
+    // Symbolic links. fs_symlink creates `linkpath` pointing at `target`
+    // (an arbitrary string, resolved lazily). fs_readlink returns the stored
+    // target of a symlink. Engines without symlink support return -1.
+    virtual int fs_symlink(const char* target, const char* linkpath) = 0;
+    virtual int fs_readlink(const char* path, std::string& out) = 0;
 
     virtual std::string fs_type_name() const = 0;
     virtual DiskUsage fs_disk_usage() const = 0;

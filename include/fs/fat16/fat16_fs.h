@@ -76,6 +76,8 @@ class Fat16Fs : public IFileSystem {
     int fs_stat(const char* path, FileStat& out) override;
     int fs_chmod(const char* path, uint16_t mode) override;
     int fs_link(const char* src, const char* dst) override;
+    int fs_symlink(const char* target, const char* linkpath) override;
+    int fs_readlink(const char* path, std::string& out) override;
 
     std::string fs_type_name() const override;
     DiskUsage fs_disk_usage() const override;

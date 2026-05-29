@@ -546,6 +546,15 @@ int Fat16Fs::fs_link(const char* /*src*/, const char* /*dst*/) {
     return -1;
 }
 
+// FAT16 has no native link concept; symlinks are a UNIX-engine feature.
+int Fat16Fs::fs_symlink(const char* /*target*/, const char* /*linkpath*/) {
+    return -1;
+}
+
+int Fat16Fs::fs_readlink(const char* /*path*/, std::string& /*out*/) {
+    return -1;
+}
+
 std::string Fat16Fs::fs_type_name() const {
     return "FAT16";
 }

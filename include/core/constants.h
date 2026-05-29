@@ -38,9 +38,10 @@ constexpr uint32_t MAX_OPEN_FILE = 20;
 constexpr uint32_t SYS_OPEN_FILE = 40;
 constexpr uint32_t MAX_USER = 8;
 
-// File mode bits
+// File mode bits (type stored in the high bits of di_mode)
 constexpr uint16_t MODE_FILE = 0x0400;
 constexpr uint16_t MODE_DIR = 0x0800;
+constexpr uint16_t MODE_SYMLINK = 0x1000;  // symbolic link; data block holds target path
 
 // Standard UNIX permission bits (octal layout)
 constexpr uint16_t PERM_OX = 0001;

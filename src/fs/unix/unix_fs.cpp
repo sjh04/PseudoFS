@@ -132,7 +132,9 @@ int UnixFs::fs_create(const char* path, uint16_t mode) {
 }
 
 int UnixFs::fs_open(const char* path, int flags) {
-    uint16_t ino = dmng_.namei(path, cwd_ino_, root_ino_);
+    // Follow a trailing symlink so "cat link" / "cp link ..." act on the
+    // target file (and permission checks below use the target's mode).
+    uint16_t ino = namei_follow(path);
     if (ino == INVALID_BLK) {
         return -1;
     }
@@ -326,7 +328,9 @@ int UnixFs::fs_delete_recursive(const char* path) {
         return -1;
     }
 
-    if (st.type == TYPE_FILE) {
+    if (st.type != TYPE_DIR) {
+        // Files and symlinks are leaves; unlink directly (a symlink is removed,
+        // never followed, so its target is left untouched).
         return fs_delete(path);
     }
 
@@ -441,7 +445,10 @@ int UnixFs::fs_rmdir(const char* path) {
 }
 
 int UnixFs::fs_chdir(const char* path) {
-    uint16_t ino = dmng_.namei(path, cwd_ino_, root_ino_);
+    // Follow a trailing symlink so "cd link_to_dir" enters the target. The
+    // path string below is kept as the (logical) argument; cwd_ino_ tracks the
+    // real target, which is what subsequent relative lookups use.
+    uint16_t ino = namei_follow(path);
     if (ino == INVALID_BLK) {
         return -1;
     }
@@ -532,7 +539,12 @@ int UnixFs::fs_ls(const char* path, std::vector<DirEntry>& out) {
 
         MemINode* eip = imng_.get(e.d_ino);
         if (eip != nullptr) {
-            de.type = (eip->di.di_mode & MODE_DIR) ? TYPE_DIR : TYPE_FILE;
+            if (eip->di.di_mode & MODE_DIR)
+                de.type = TYPE_DIR;
+            else if (eip->di.di_mode & MODE_SYMLINK)
+                de.type = TYPE_SYMLINK;
+            else
+                de.type = TYPE_FILE;
             de.size = eip->di.di_size;
             imng_.put(eip);
         }
@@ -566,7 +578,14 @@ int UnixFs::fs_stat(const char* path, FileStat& out) {
     out.mtime = ip->di.di_mtime;
     out.ctime = ip->di.di_ctime;
     out.nlink = ip->di.di_nlink;
-    out.type = (ip->di.di_mode & MODE_DIR) ? TYPE_DIR : TYPE_FILE;
+    // lstat semantics: report the link itself, not its target, so ls/ll/stat
+    // can show it as a symlink.
+    if (ip->di.di_mode & MODE_DIR)
+        out.type = TYPE_DIR;
+    else if (ip->di.di_mode & MODE_SYMLINK)
+        out.type = TYPE_SYMLINK;
+    else
+        out.type = TYPE_FILE;
     imng_.put(ip);
     return 0;
 }
@@ -629,6 +648,129 @@ int UnixFs::fs_link(const char* src, const char* dst) {
     imng_.put(src_ip);
     sync();
     return 0;
+}
+
+int UnixFs::fs_symlink(const char* target, const char* linkpath) {
+    if (target == nullptr || *target == '\0') {
+        return -1;
+    }
+    std::string basename;
+    uint16_t parent_ino = dmng_.namei_parent(linkpath, cwd_ino_, root_ino_, basename);
+    if (parent_ino == INVALID_BLK) {
+        return -1;
+    }
+
+    MemINode* parent_ip = imng_.get(parent_ino);
+    if (parent_ip == nullptr) {
+        return -1;
+    }
+
+    if (!check_access(parent_ip, O_WRITE)) {
+        imng_.put(parent_ip);
+        return -1;
+    }
+
+    if (dmng_.lookup(parent_ip, basename.c_str()) != INVALID_BLK) {
+        imng_.put(parent_ip);
+        return -1;
+    }
+
+    // A symlink is an inode whose data is the target path string. The target
+    // fits in one block (paths are short); cap to BLOCK_SIZE defensively.
+    MemINode* new_ip = imng_.alloc(MODE_SYMLINK | DEFAULT_MODE, cur_uid_, cur_gid_);
+    if (new_ip == nullptr) {
+        imng_.put(parent_ip);
+        return -1;
+    }
+
+    size_t tlen = std::strlen(target);
+    if (tlen > BLOCK_SIZE) tlen = BLOCK_SIZE;
+    uint16_t phys = imng_.bmap_alloc(new_ip, 0);
+    if (phys == INVALID_BLK) {
+        new_ip->di.di_nlink = 0;  // free the inode on put()
+        imng_.put(new_ip);
+        imng_.put(parent_ip);
+        return -1;
+    }
+    uint8_t blk[BLOCK_SIZE];
+    std::memset(blk, 0, BLOCK_SIZE);
+    std::memcpy(blk, target, tlen);
+    dev_.write_block(DATA_START_BLK + phys, blk);
+    new_ip->di.di_size = static_cast<uint32_t>(tlen);
+    new_ip->i_dirty = true;
+
+    if (dmng_.link(parent_ip, basename.c_str(), new_ip->i_ino) != 0) {
+        new_ip->di.di_nlink = 0;
+        imng_.put(new_ip);
+        imng_.put(parent_ip);
+        return -1;
+    }
+
+    imng_.write_back(new_ip);
+    imng_.write_back(parent_ip);
+    imng_.put(new_ip);
+    imng_.put(parent_ip);
+    sync();
+    return 0;
+}
+
+int UnixFs::fs_readlink(const char* path, std::string& out) {
+    uint16_t ino = dmng_.namei(path, cwd_ino_, root_ino_);
+    if (ino == INVALID_BLK) {
+        return -1;
+    }
+    MemINode* ip = imng_.get(ino);
+    if (ip == nullptr) {
+        return -1;
+    }
+    if (!(ip->di.di_mode & MODE_SYMLINK)) {
+        imng_.put(ip);
+        return -1;  // not a symlink
+    }
+    out = read_link_target(ip);
+    imng_.put(ip);
+    return 0;
+}
+
+std::string UnixFs::read_link_target(MemINode* ip) {
+    uint32_t sz = ip->di.di_size;
+    if (sz == 0 || sz > BLOCK_SIZE) {
+        return std::string();
+    }
+    uint16_t phys = imng_.bmap(ip, 0);
+    if (phys == 0 || phys == INVALID_BLK) {
+        return std::string();
+    }
+    uint8_t blk[BLOCK_SIZE];
+    dev_.read_block(DATA_START_BLK + phys, blk);
+    return std::string(reinterpret_cast<char*>(blk), sz);
+}
+
+uint16_t UnixFs::namei_follow(const char* path) {
+    uint16_t ino = dmng_.namei(path, cwd_ino_, root_ino_);
+    // Follow chained symlinks; the hop cap turns cycles and broken links into
+    // a clean failure instead of an infinite loop.
+    for (int hops = 0; ino != INVALID_BLK && hops < 16; ++hops) {
+        MemINode* ip = imng_.get(ino);
+        if (ip == nullptr) {
+            return INVALID_BLK;
+        }
+        if (!(ip->di.di_mode & MODE_SYMLINK)) {
+            imng_.put(ip);
+            return ino;  // resolved to a real file/dir
+        }
+        std::string target = read_link_target(ip);
+        imng_.put(ip);
+        if (target.empty()) {
+            return INVALID_BLK;
+        }
+        // Relative targets resolve from the current directory (good enough for
+        // the common "ln -s file link" / absolute-target cases).
+        ino = dmng_.namei(target.c_str(), cwd_ino_, root_ino_);
+    }
+    // A real file/dir returns from inside the loop above. Reaching here means
+    // the target was unresolvable or we hit the hop cap (a cycle): fail.
+    return INVALID_BLK;
 }
 
 // ---- System info ----

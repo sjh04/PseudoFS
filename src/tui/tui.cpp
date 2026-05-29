@@ -131,6 +131,10 @@ static void walk_tree(IFileSystem& fs, const std::string& path, int& line,
             wattron(win, COLOR_PAIR(1) | A_BOLD);
             wprintw(win, "%s/", e.name);
             wattroff(win, COLOR_PAIR(1) | A_BOLD);
+        } else if (e.type == TYPE_SYMLINK) {
+            wattron(win, COLOR_PAIR(4));  // cyan, with @ marker
+            wprintw(win, "%s@", e.name);
+            wattroff(win, COLOR_PAIR(4));
         } else {
             wattron(win, COLOR_PAIR(3));
             wprintw(win, "%s", e.name);

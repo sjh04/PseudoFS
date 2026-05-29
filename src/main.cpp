@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <functional>
 #include <string>
 #include <vector>
@@ -27,8 +28,19 @@ static const char* USERS_FILE = "pfs_users.dat";
 // "permission denied" instead of a misleading "file not found".
 static std::string open_error(IFileSystem& fs, const std::string& path) {
     FileStat st{};
-    return fs.fs_stat(path.c_str(), st) == 0 ? "permission denied"
-                                             : "no such file";
+    if (fs.fs_stat(path.c_str(), st) != 0) return "no such file";
+    // The path exists. If it is a symlink, the open most likely failed because
+    // its target is unresolvable — distinguish that from a real permission
+    // denial (fs_stat is lstat-style, so statting the target tells us).
+    if (st.type == TYPE_SYMLINK) {
+        std::string target;
+        FileStat tst{};
+        if (fs.fs_readlink(path.c_str(), target) == 0 &&
+            fs.fs_stat(target.c_str(), tst) != 0) {
+            return "broken symbolic link";
+        }
+    }
+    return "permission denied";
 }
 
 static void register_commands(CommandRegistry& reg) {
@@ -318,12 +330,17 @@ static void register_commands(CommandRegistry& reg) {
             }
             out.clear();
             for (auto& e : entries) {
-                if (e.type == TYPE_DIR) out += "\033[32m";
-                out += e.name;
-                if (e.type == TYPE_DIR)
+                if (e.type == TYPE_DIR) {
+                    out += "\033[32m";  // green
+                    out += e.name;
                     out += "/\033[0m";
-                else
-                    out += "\033[0m";
+                } else if (e.type == TYPE_SYMLINK) {
+                    out += "\033[36m";  // cyan
+                    out += e.name;
+                    out += "@\033[0m";
+                } else {
+                    out += e.name;
+                }
                 out += "  ";
             }
             if (out.empty()) out = "(empty)";
@@ -333,28 +350,79 @@ static void register_commands(CommandRegistry& reg) {
 
     reg.register_cmd(
         "ll",
-        [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
+        [](IFileSystem& fs, UserManager& um, const std::vector<std::string>& args,
            std::string& out) -> int {
-            const char* path = args.empty() ? "" : args[0].c_str();
+            std::string base = args.empty() ? std::string() : args[0];
             std::vector<DirEntry> entries;
-            int ret = fs.fs_ls(path, entries);
+            int ret = fs.fs_ls(base.c_str(), entries);
             if (ret != 0) {
                 out = "ll: cannot list";
                 return ret;
             }
             out.clear();
             for (auto& e : entries) {
+                // Stat the entry by its full path. Statting bare e.name would
+                // resolve against the cwd, which is wrong whenever ll targets a
+                // different directory (e.g. "ll /home").
+                std::string full;
+                if (base.empty())
+                    full = e.name;
+                else if (base == "/")
+                    full = "/" + std::string(e.name);
+                else
+                    full = base + "/" + std::string(e.name);
+
                 FileStat st{};
-                fs.fs_stat(e.name, st);
-                char line[128];
-                std::snprintf(line, sizeof(line), "%c%03o  %5u  %s\n",
-                              (e.type == TYPE_DIR) ? 'd' : '-', st.mode & 0x1FF, st.size, e.name);
-                out += line;
+                fs.fs_stat(full.c_str(), st);
+
+                // Permission column: type char + rwx triplets, e.g. drwxr-xr-x.
+                char perm[11];
+                perm[0] = (e.type == TYPE_DIR)       ? 'd'
+                          : (e.type == TYPE_SYMLINK) ? 'l'
+                                                     : '-';
+                const char* rwx = "rwxrwxrwx";
+                for (int i = 0; i < 9; ++i)
+                    perm[i + 1] = (st.mode & (1 << (8 - i))) ? rwx[i] : '-';
+                perm[10] = '\0';
+
+                // Owner: username if known, else the raw uid.
+                char owner[16];
+                const UserRecord* u = um.find_user(st.uid);
+                if (u != nullptr)
+                    std::snprintf(owner, sizeof(owner), "%s", u->username);
+                else
+                    std::snprintf(owner, sizeof(owner), "%u", st.uid);
+
+                // Modification time as "MM-DD HH:MM".
+                char when[16] = "-";
+                std::time_t t = static_cast<std::time_t>(st.mtime);
+                std::tm* lt = std::localtime(&t);
+                if (lt) std::strftime(when, sizeof(when), "%m-%d %H:%M", lt);
+
+                // Name suffix: "/" for dirs, "@ -> target" for symlinks.
+                std::string suffix;
+                if (e.type == TYPE_DIR) {
+                    suffix = "/";
+                } else if (e.type == TYPE_SYMLINK) {
+                    std::string tgt;
+                    suffix = (fs.fs_readlink(full.c_str(), tgt) == 0)
+                                 ? "@ -> " + tgt
+                                 : "@";
+                }
+                // Fixed-width prefix via snprintf; append name+suffix as a
+                // string so a long symlink target is never truncated.
+                char head[64];
+                std::snprintf(head, sizeof(head), "%s %2u %-8s %6u  %s  ", perm,
+                              st.nlink, owner, st.size, when);
+                out += head;
+                out += e.name;
+                out += suffix;
+                out += "\n";
             }
             if (out.empty()) out = "(empty)";
             return 0;
         },
-        "ll [path] — detailed listing");
+        "ll [path] — detailed listing (perm/links/owner/size/mtime)");
 
     reg.register_cmd(
         "touch",
@@ -538,13 +606,21 @@ static void register_commands(CommandRegistry& reg) {
                 out = "stat: not found";
                 return ret;
             }
+            const char* type_str = st.type == TYPE_DIR       ? "directory"
+                                   : st.type == TYPE_SYMLINK ? "symlink"
+                                                             : "file";
             char buf[256];
             std::snprintf(buf, sizeof(buf),
                           "Type: %s\nMode: %04o\nUID: %u  GID: %u\n"
                           "Size: %u bytes\nLinks: %u",
-                          st.type == TYPE_DIR ? "directory" : "file", st.mode & 0x1FF, st.uid,
+                          type_str, st.mode & 0x1FF, st.uid,
                           st.gid, st.size, st.nlink);
             out = buf;
+            if (st.type == TYPE_SYMLINK) {
+                std::string tgt;
+                if (fs.fs_readlink(args[0].c_str(), tgt) == 0)
+                    out += "\nTarget: " + tgt;
+            }
             return 0;
         },
         "stat <path> — file/directory info");
@@ -568,15 +644,44 @@ static void register_commands(CommandRegistry& reg) {
         "ln",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string& out) -> int {
-            if (args.size() < 2) {
-                out = "Usage: ln <src> <dst>";
+            bool symbolic = false;
+            std::vector<std::string> pos;
+            for (auto& a : args) {
+                if (a == "-s")
+                    symbolic = true;
+                else
+                    pos.push_back(a);
+            }
+            if (pos.size() < 2) {
+                out = "Usage: ln [-s] <target> <linkname>";
                 return -1;
             }
-            int ret = fs.fs_link(args[0].c_str(), args[1].c_str());
-            if (ret != 0) out = "ln: failed";
+            int ret = symbolic ? fs.fs_symlink(pos[0].c_str(), pos[1].c_str())
+                               : fs.fs_link(pos[0].c_str(), pos[1].c_str());
+            if (ret != 0)
+                out = symbolic ? "ln: symlink failed (target name taken, or FS has no symlink support)"
+                               : "ln: failed";
             return ret;
         },
-        "ln <src> <dst> — create hard link");
+        "ln [-s] <target> <link> — hard link, or -s for soft (symbolic) link");
+
+    reg.register_cmd(
+        "readlink",
+        [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
+           std::string& out) -> int {
+            if (args.empty()) {
+                out = "Usage: readlink <path>";
+                return -1;
+            }
+            std::string target;
+            if (fs.fs_readlink(args[0].c_str(), target) != 0) {
+                out = "readlink: not a symbolic link";
+                return -1;
+            }
+            out = target;
+            return 0;
+        },
+        "readlink <path> — print a symlink's target");
 
     reg.register_cmd(
         "cp",

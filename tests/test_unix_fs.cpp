@@ -313,3 +313,88 @@ TEST_F(UnixFsTest, OtherAccessAllowed) {
     ASSERT_GE(fd, 0);
     fs.fs_close(fd);
 }
+
+// ---- Symbolic links ----
+
+TEST_F(UnixFsTest, SymlinkCreateAndReadlink) {
+    ASSERT_EQ(fs.fs_create("target.txt", 0644), 0);
+    ASSERT_EQ(fs.fs_symlink("target.txt", "link.txt"), 0);
+
+    std::string out;
+    ASSERT_EQ(fs.fs_readlink("link.txt", out), 0);
+    EXPECT_EQ(out, "target.txt");
+}
+
+TEST_F(UnixFsTest, SymlinkStatReportsLinkType) {
+    fs.fs_create("target.txt", 0644);
+    fs.fs_symlink("target.txt", "link.txt");
+
+    FileStat st{};
+    ASSERT_EQ(fs.fs_stat("link.txt", st), 0);
+    EXPECT_EQ(st.type, TYPE_SYMLINK);  // lstat: the link itself, not the target
+}
+
+TEST_F(UnixFsTest, SymlinkAppearsInListing) {
+    fs.fs_create("target.txt", 0644);
+    fs.fs_symlink("target.txt", "link.txt");
+
+    std::vector<DirEntry> entries;
+    ASSERT_EQ(fs.fs_ls("", entries), 0);
+    bool found = false;
+    for (auto& e : entries) {
+        if (std::strncmp(e.name, "link.txt", MAX_FILENAME) == 0) {
+            found = true;
+            EXPECT_EQ(e.type, TYPE_SYMLINK);
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
+TEST_F(UnixFsTest, SymlinkOpenFollowsToTarget) {
+    fs.fs_create("target.txt", 0644);
+    int fd = fs.fs_open("target.txt", O_WRITE);
+    ASSERT_GE(fd, 0);
+    const char* msg = "through-the-link";
+    fs.fs_write(fd, msg, std::strlen(msg));
+    fs.fs_close(fd);
+
+    ASSERT_EQ(fs.fs_symlink("target.txt", "link.txt"), 0);
+
+    // Opening the link reads the target's content.
+    fd = fs.fs_open("link.txt", O_READ);
+    ASSERT_GE(fd, 0);
+    char buf[64] = {0};
+    ssize_t n = fs.fs_read(fd, buf, sizeof(buf));
+    fs.fs_close(fd);
+    ASSERT_EQ(n, static_cast<ssize_t>(std::strlen(msg)));
+    EXPECT_STREQ(buf, msg);
+}
+
+TEST_F(UnixFsTest, DeleteSymlinkLeavesTargetIntact) {
+    fs.fs_create("target.txt", 0644);
+    fs.fs_symlink("target.txt", "link.txt");
+
+    ASSERT_EQ(fs.fs_delete("link.txt"), 0);
+
+    FileStat st{};
+    EXPECT_EQ(fs.fs_stat("link.txt", st), -1);   // link gone
+    EXPECT_EQ(fs.fs_stat("target.txt", st), 0);  // target survives
+}
+
+TEST_F(UnixFsTest, BrokenSymlinkOpenFails) {
+    ASSERT_EQ(fs.fs_symlink("nonexistent.txt", "dangling"), 0);
+    EXPECT_LT(fs.fs_open("dangling", O_READ), 0);
+}
+
+TEST_F(UnixFsTest, SymlinkCycleDoesNotHang) {
+    // a -> b, b -> a. Resolution must give up (hop cap), not loop forever.
+    ASSERT_EQ(fs.fs_symlink("b", "a"), 0);
+    ASSERT_EQ(fs.fs_symlink("a", "b"), 0);
+    EXPECT_LT(fs.fs_open("a", O_READ), 0);
+}
+
+TEST_F(UnixFsTest, ReadlinkOnRegularFileFails) {
+    fs.fs_create("plain.txt", 0644);
+    std::string out;
+    EXPECT_EQ(fs.fs_readlink("plain.txt", out), -1);
+}
