@@ -86,6 +86,21 @@ static std::string strip_ansi(const std::string& s) {
     return out;
 }
 
+// Write multi-line command output, indenting EVERY line by two spaces. A single
+// wprintw("  %s\n", text) indents only the first line — newlines embedded in the
+// output (ls / ll / tree / cat / help) reset the cursor to column 0, leaving the
+// remaining lines flush-left and ragged. Split on '\n' and indent each line.
+static void print_output(WINDOW* win, const std::string& text) {
+    size_t start = 0;
+    while (start <= text.size()) {
+        size_t nl = text.find('\n', start);
+        size_t end = (nl == std::string::npos) ? text.size() : nl;
+        wprintw(win, "  %s\n", text.substr(start, end - start).c_str());
+        if (nl == std::string::npos) break;
+        start = nl + 1;
+    }
+}
+
 // ------- Helper: recursive tree walk -------
 
 static void walk_tree(IFileSystem& fs, const std::string& path, int& line,
@@ -407,12 +422,11 @@ void Tui::run() {
             }
 
             std::string shown = strip_ansi(output);
-            if (ret != 0 && !shown.empty()) {
-                wattron(w.term_win, COLOR_PAIR(5));
-                wprintw(w.term_win, "  %s\n", shown.c_str());
-                wattroff(w.term_win, COLOR_PAIR(5));
-            } else if (!shown.empty()) {
-                wprintw(w.term_win, "  %s\n", shown.c_str());
+            while (!shown.empty() && shown.back() == '\n') shown.pop_back();
+            if (!shown.empty()) {
+                if (ret != 0) wattron(w.term_win, COLOR_PAIR(5));
+                print_output(w.term_win, shown);
+                if (ret != 0) wattroff(w.term_win, COLOR_PAIR(5));
             }
 
             // Refresh the side panels so the tree / disk / title reflect what
