@@ -57,10 +57,22 @@ public:
     const UserRecord* find_user(uint16_t uid) const;
     const UserRecord* find_user(const char* username) const;
 
+    // --- Persistence ---
+    // Dump the user table to a host file (binary). Returns 0 on success.
+    int save_to_file(const char* path) const;
+    // Restore the user table from a host file. Returns 0 on success; on
+    // failure the current table is left unchanged. Leaves the session
+    // logged out (current user must log in again).
+    int load_from_file(const char* path);
+    // Enable auto-save: once set, a successful add_user/change_password
+    // flushes the table to `path`, mirroring the FS engines' auto-sync.
+    void set_persist_path(const std::string& path);
+
 private:
     UserRecord users_[MAX_USER];
     int user_count_;
     int current_index_;  // -1 when no user logged in
+    std::string persist_path_;  // empty = auto-save disabled
 };
 
 }  // namespace pfs

@@ -17,6 +17,9 @@ using namespace pfs;
 
 static const char* UNIX_DISK = "pfs_unix.img";
 static const char* FAT16_DISK = "pfs_fat16.img";
+// User accounts live outside the FS image so a single table is shared across
+// both engines and both (CLI / TUI) modes.
+static const char* USERS_FILE = "pfs_users.dat";
 
 static void register_commands(CommandRegistry& reg) {
     reg.register_cmd(
@@ -721,7 +724,11 @@ int main(int argc, char* argv[]) {
 
     CommandRegistry reg;
     register_commands(reg);
+
     UserManager um;
+    if (!force_format) um.load_from_file(USERS_FILE);  // restore prior accounts
+    um.set_persist_path(USERS_FILE);  // auto-save on useradd/passwd
+    if (force_format) um.save_to_file(USERS_FILE);  // --format: reset to root
 
     if (use_tui) {
         // --- TUI mode: separate disks for each FS ---

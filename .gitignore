@@ -13,6 +13,9 @@ pfs
 *.img
 *.pfs
 
+# User account table
+pfs_users.dat
+
 # IDE
 .vscode/
 .idea/

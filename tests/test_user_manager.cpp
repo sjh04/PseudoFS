@@ -1,5 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <cstdint>
+#include <cstdio>
+
 #include "core/user_manager.h"
 
 namespace pfs {
@@ -262,6 +265,73 @@ TEST_F(UserManagerTest, FindUserByName) {
     ASSERT_NE(u, nullptr);
     EXPECT_EQ(u->uid, 3);
     EXPECT_EQ(um.find_user("nobody"), nullptr);
+}
+
+// --- Persistence ---
+
+TEST(UserManagerPersistence, SaveLoadRoundTrip) {
+    const char* path = "test_um_roundtrip.dat";
+    std::remove(path);
+
+    UserManager src;
+    src.login("root", "root");
+    src.add_user("alice", "apw", 1000, 100);
+    src.add_user("bob", "bpw", 2000, 200);
+    ASSERT_EQ(src.save_to_file(path), 0);
+
+    UserManager dst;
+    ASSERT_EQ(dst.load_from_file(path), 0);
+    // Restored table starts logged out.
+    EXPECT_FALSE(dst.is_logged_in());
+    // Restored accounts are usable.
+    EXPECT_EQ(dst.login("alice", "apw"), 1000);
+    EXPECT_EQ(dst.current_gid(), 100);
+    auto* b = dst.find_user("bob");
+    ASSERT_NE(b, nullptr);
+    EXPECT_EQ(b->uid, 2000);
+
+    std::remove(path);
+}
+
+TEST(UserManagerPersistence, AutoSaveOnUseradd) {
+    const char* path = "test_um_autosave.dat";
+    std::remove(path);
+
+    {
+        UserManager src;
+        src.set_persist_path(path);  // enable auto-save
+        src.login("root", "root");
+        src.add_user("dave", "dpw", 1500, 150);  // should flush automatically
+    }
+
+    UserManager dst;
+    ASSERT_EQ(dst.load_from_file(path), 0);
+    EXPECT_EQ(dst.login("dave", "dpw"), 1500);
+
+    std::remove(path);
+}
+
+TEST(UserManagerPersistence, LoadMissingFileLeavesTableIntact) {
+    UserManager um;
+    EXPECT_EQ(um.load_from_file("definitely_no_such_file.dat"), -1);
+    // root must still be present and functional.
+    EXPECT_EQ(um.login("root", "root"), 0);
+}
+
+TEST(UserManagerPersistence, LoadRejectsBadMagic) {
+    const char* path = "test_um_badmagic.dat";
+    FILE* fp = std::fopen(path, "wb");
+    ASSERT_NE(fp, nullptr);
+    uint32_t garbage = 0xDEADBEEF;
+    std::fwrite(&garbage, sizeof(garbage), 1, fp);
+    std::fclose(fp);
+
+    UserManager um;
+    EXPECT_EQ(um.load_from_file(path), -1);
+    // Live table untouched: still root-only and usable.
+    EXPECT_EQ(um.login("root", "root"), 0);
+
+    std::remove(path);
 }
 
 }  // namespace

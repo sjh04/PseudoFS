@@ -1,10 +1,16 @@
 #include "core/user_manager.h"
 
+#include <cstdio>
 #include <cstring>
 
 #include "core/constants.h"
 
 namespace pfs {
+
+namespace {
+// "PUSR" little-endian — identifies a PseudoFS user-table file.
+constexpr uint32_t USER_MAGIC = 0x52535550;
+}  // namespace
 
 UserManager::UserManager() : user_count_(0), current_index_(-1) {
     // Pre-create root user
@@ -60,6 +66,7 @@ int UserManager::add_user(const char* username, const char* password,
     std::strncpy(rec.password, password, PWDSIZ - 1);
     rec.password[PWDSIZ - 1] = '\0';
     users_[user_count_++] = rec;
+    if (!persist_path_.empty()) save_to_file(persist_path_.c_str());
     return 0;
 }
 
@@ -85,6 +92,7 @@ int UserManager::change_password(uint16_t user_id, const char* old_pw,
         if (users_[i].uid == user_id) {
             std::strncpy(users_[i].password, new_pw, PWDSIZ - 1);
             users_[i].password[PWDSIZ - 1] = '\0';
+            if (!persist_path_.empty()) save_to_file(persist_path_.c_str());
             return 0;
         }
     }
@@ -171,6 +179,50 @@ int UserManager::su(uint16_t uid, const char* password) {
         }
     }
     return -1;
+}
+
+int UserManager::save_to_file(const char* path) const {
+    FILE* fp = std::fopen(path, "wb");
+    if (fp == nullptr) return -1;
+
+    uint32_t magic = USER_MAGIC;
+    uint32_t count = static_cast<uint32_t>(user_count_);
+    bool ok = std::fwrite(&magic, sizeof(magic), 1, fp) == 1 &&
+              std::fwrite(&count, sizeof(count), 1, fp) == 1 &&
+              std::fwrite(users_, sizeof(UserRecord), user_count_, fp) ==
+                  static_cast<size_t>(user_count_);
+    std::fclose(fp);
+    return ok ? 0 : -1;
+}
+
+int UserManager::load_from_file(const char* path) {
+    FILE* fp = std::fopen(path, "rb");
+    if (fp == nullptr) return -1;
+
+    uint32_t magic = 0;
+    uint32_t count = 0;
+    if (std::fread(&magic, sizeof(magic), 1, fp) != 1 || magic != USER_MAGIC ||
+        std::fread(&count, sizeof(count), 1, fp) != 1 || count == 0 ||
+        count > MAX_USER) {
+        std::fclose(fp);
+        return -1;
+    }
+
+    // Read into a temp buffer first so a truncated/corrupt file cannot
+    // clobber the live table (which always has at least root).
+    UserRecord tmp[MAX_USER];
+    size_t n = std::fread(tmp, sizeof(UserRecord), count, fp);
+    std::fclose(fp);
+    if (n != count) return -1;
+
+    for (uint32_t i = 0; i < count; ++i) users_[i] = tmp[i];
+    user_count_ = static_cast<int>(count);
+    current_index_ = -1;  // restored table starts logged out
+    return 0;
+}
+
+void UserManager::set_persist_path(const std::string& path) {
+    persist_path_ = path;
 }
 
 }  // namespace pfs
