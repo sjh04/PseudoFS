@@ -67,10 +67,14 @@ static void register_commands(CommandRegistry& reg) {
                 out = "useradd: failed (need root, unique name, and free slot)";
                 return -1;
             }
-            // Create home directory for the new user
+            // Create home directory for the new user. /home stays root-owned;
+            // the per-user dir is created as the new user so they own it (and
+            // can actually write in it after logging in).
             std::string home = "/home/" + std::string(args[0]);
             fs.fs_mkdir("/home");
+            fs.set_user(uid, gid);
             fs.fs_mkdir(home.c_str());
+            fs.set_user(um.current_uid(), um.current_gid());  // restore to root
             out = "User " + std::string(args[0]) + " created.";
             return 0;
         },

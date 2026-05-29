@@ -1,5 +1,8 @@
 #include "shell/command_registry.h"
 
+#include "core/user_manager.h"
+#include "core/vfs.h"
+
 namespace pfs {
 
 void CommandRegistry::register_cmd(const std::string& name, CmdHandler handler,
@@ -19,6 +22,12 @@ int CommandRegistry::execute(const std::string& cmdline, IFileSystem& fs, UserMa
 
     std::string cmd_name = args[0];
     args.erase(args.begin());
+
+    // Drive the FS permission layer from the logged-in user, so every command
+    // runs with the current user's identity (login/su/logout take effect on the
+    // next command). Without this the engine stays at its default uid (root) and
+    // rwx checks never fire. Covers CLI, TUI, and post-F2-switch dispatch.
+    fs.set_user(um.current_uid(), um.current_gid());
 
     for (const auto& [name, entry] : commands_) {
         if (name == cmd_name) {

@@ -1,17 +1,17 @@
 #include <gtest/gtest.h>
 
+#include "core/user_manager.h"
 #include "shell/command_registry.h"
+#include "stub_fs.h"
 
 namespace pfs {
 namespace {
 
 // Simulate a mini shell session: register commands and run them in sequence.
-// Uses the same buffer-cast pattern as the unit tests since IFileSystem and
-// UserManager are only forward-declared.
+// execute() drives fs.set_user(...) per command, so use live objects.
 
-alignas(64) char buf[512];
-IFileSystem& fs = *static_cast<IFileSystem*>(static_cast<void*>(buf));
-UserManager& um = *static_cast<UserManager*>(static_cast<void*>(buf + 256));
+StubFs fs;
+UserManager um;
 
 TEST(Integration, FullShellSession) {
     CommandRegistry reg;

@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
+#include "core/user_manager.h"
 #include "shell/command_registry.h"
+#include "stub_fs.h"
 
 namespace pfs {
 namespace {
@@ -97,17 +99,12 @@ TEST(CommandRegistryTest, RegisterAndList) {
 }
 
 // --- Execute tests ---
-// IFileSystem and UserManager are forward-declared in the header. Since
-// the test handlers below don't access fs/um, we use a small buffer as
-// placeholder storage to form valid-enough references for the dispatch call.
 
 TEST(CommandRegistryTest, ExecuteUnknownCommand) {
     CommandRegistry reg;
+    StubFs fs;
+    UserManager um;
     std::string output;
-
-    alignas(64) char buf[256];
-    IFileSystem& fs = *static_cast<IFileSystem*>(static_cast<void*>(buf));
-    UserManager& um = *static_cast<UserManager*>(static_cast<void*>(buf));
 
     int ret = reg.execute("foobar", fs, um, output);
     EXPECT_EQ(ret, -1);
@@ -125,10 +122,8 @@ TEST(CommandRegistryTest, ExecuteCallsRegisteredHandler) {
         },
         "greet [name]");
 
-    alignas(64) char buf[256];
-    IFileSystem& fs = *static_cast<IFileSystem*>(static_cast<void*>(buf));
-    UserManager& um = *static_cast<UserManager*>(static_cast<void*>(buf));
-
+    StubFs fs;
+    UserManager um;
     std::string output;
     int ret = reg.execute("greet Alice", fs, um, output);
     EXPECT_EQ(ret, 42);
@@ -137,11 +132,8 @@ TEST(CommandRegistryTest, ExecuteCallsRegisteredHandler) {
 
 TEST(CommandRegistryTest, ExecuteEmptyCommandLine) {
     CommandRegistry reg;
-
-    alignas(64) char buf[256];
-    IFileSystem& fs = *static_cast<IFileSystem*>(static_cast<void*>(buf));
-    UserManager& um = *static_cast<UserManager*>(static_cast<void*>(buf));
-
+    StubFs fs;
+    UserManager um;
     std::string output;
     int ret = reg.execute("   ", fs, um, output);
     EXPECT_EQ(ret, 0);

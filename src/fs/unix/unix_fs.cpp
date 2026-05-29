@@ -646,10 +646,10 @@ DiskUsage UnixFs::fs_disk_usage() const {
     return du;
 }
 
-void UnixFs::set_user(uint16_t uid, uint16_t gid, uint16_t slot) {
+void UnixFs::set_user(uint16_t uid, uint16_t gid) {
     cur_uid_ = uid;
     cur_gid_ = gid;
-    user_slot_ = slot;
+    user_slot_ = 0;
 }
 
 void UnixFs::set_disk_path(const std::string& path) {

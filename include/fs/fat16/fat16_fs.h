@@ -80,7 +80,7 @@ class Fat16Fs : public IFileSystem {
     std::string fs_type_name() const override;
     DiskUsage fs_disk_usage() const override;
 
-    void set_user(uint16_t uid, uint16_t gid);
+    void set_user(uint16_t uid, uint16_t gid) override;
     void set_disk_path(const std::string& path);
 
    private:

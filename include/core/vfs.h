@@ -47,6 +47,9 @@ class IFileSystem {
     virtual int fs_mount() = 0;
     virtual int fs_unmount() = 0;
 
+    // Set the current user context for permission checks (driven by login/su).
+    virtual void set_user(uint16_t uid, uint16_t gid) = 0;
+
     virtual int fs_create(const char* path, uint16_t mode) = 0;
     virtual int fs_open(const char* path, int flags) = 0;
     virtual int fs_close(int fd) = 0;
