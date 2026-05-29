@@ -7,8 +7,9 @@
 - **双文件系统引擎**：UNIX inode 体系 + FAT16，通过 VFS 抽象层统一，F2 一键切换
 - **成组块链接法**：UNIX FS 空闲块管理（50 块/组）
 - **混合索引**：直接索引 + 一次间址 + 二次间址
-- **ncurses TUI**：目录树面板 / 磁盘可视化 / 终端交互
-- **多用户权限**：login/logout、rwx 三级访问控制（owner/group/other）
+- **多用户权限**：login/logout/su、rwx 三级访问控制（owner/group/other），权限随登录用户实时生效
+- **持久化**：文件系统与用户表均保存到宿主机文件，重启后恢复
+- **ncurses TUI**：目录树 / 磁盘用量条 / 终端面板 + F3 全屏磁盘块位图
 
 ## Quick Start
 
@@ -21,13 +22,16 @@ mkdir build && cd build
 cmake .. && make -j$(nproc)
 
 # 运行
-./pfs                # 默认 UNIX FS
-./pfs --fat16        # 使用 FAT16
-./pfs --format       # 强制格式化
+./pfs                # CLI 模式，默认 UNIX FS
+./pfs --fat16        # CLI 模式，使用 FAT16
+./pfs --tui          # ncurses TUI（四面板 + 功能键）
+./pfs --format       # 强制格式化（同时重置用户表）
 
 # 测试
 ./pfs_tests
 ```
+
+预置用户 **root / root**；要创建其他用户需先 `login root root`，再 `useradd <name> <pw> <uid> <gid>`。
 
 ## Project Structure
 
@@ -53,19 +57,27 @@ PseudoFS/
 
 ## Commands
 
-| 命令 | 说明 |
+| 类别 | 命令 |
 |------|------|
-| `login` / `logout` | 用户登录/注销 |
-| `useradd` / `passwd` | 创建用户/修改密码 |
-| `mkdir` / `rmdir` | 创建/删除目录 |
-| `cd` / `pwd` / `ls` / `ll` | 目录导航 |
-| `touch` / `open` / `close` | 创建/打开/关闭文件 |
-| `read` / `write` | 读写文件 |
-| `rm` / `cp` / `mv` | 删除/复制/移动 |
-| `ln` / `chmod` / `stat` | 链接/权限/详情 |
-| `tree` | 目录树 |
-| `format` | 格式化文件系统 |
-| `help` | 帮助 |
+| 用户 | `login <user> <pw>` · `logout` · `useradd <user> <pw> <uid> <gid>` · `passwd <old> <new>` · `su <uid\|name> [pw]` |
+| 目录 | `mkdir [-p] <path>` · `rmdir <path>` · `cd [path]`（支持 `~`、`..`）· `pwd` · `ls [path]` · `ll [path]` · `tree [-d N] [path]` |
+| 文件 | `touch <file>` · `open <file> [r\|w\|rw\|a]` · `close <fd>` · `read <fd> [len]` · `write <fd> <text>` · `cat <file>` · `more <file>` · `rm [-r] <path>` · `cp <src> <dst>` · `mv <src> <dst>` · `ln <src> <dst>` |
+| 元信息/权限 | `stat <path>` · `chmod <mode> <path>` · `find <path> <name>` · `disk` |
+| 系统 | `format` · `history` · `help` · `exit` |
+
+> 读写文件是 fd 流程：`open` 返回 `fd`，再用 `read <fd>` / `write <fd> <text>`，最后 `close <fd>`。
+
+### TUI 功能键（`--tui`）
+
+| 按键 | 功能 |
+|------|------|
+| F1 | 帮助窗口 |
+| F2 | 切换 UNIX FS ↔ FAT16 |
+| F3 | 全屏磁盘块位图（占用/空闲/元数据） |
+| F5 | 刷新界面 |
+| F10 | 退出 |
+| ↑ ↓ | 命令历史 |
+| Tab | 文件名补全 |
 
 ## Documentation
 
