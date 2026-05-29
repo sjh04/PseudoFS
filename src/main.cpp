@@ -947,10 +947,16 @@ static void register_commands(CommandRegistry& reg) {
                 std::time_t t = static_cast<std::time_t>(entries[i].time);
                 std::tm* lt = std::localtime(&t);
                 if (lt) std::strftime(ts, sizeof(ts), "%m-%d %H:%M:%S", lt);
-                char head[48];
-                std::snprintf(head, sizeof(head), "%3zu  %s  %-8s  ", i + 1, ts,
-                              entries[i].user.c_str());
+                // Fixed-width index + timestamp via snprintf; append the
+                // (unbounded) username and command line as strings so neither
+                // can overflow/truncate a fixed buffer.
+                char head[40];
+                std::snprintf(head, sizeof(head), "%3zu  %s  ", i + 1, ts);
                 out += head;
+                std::string user = entries[i].user;
+                out += user;
+                if (user.size() < 8) out += std::string(8 - user.size(), ' ');
+                out += "  ";
                 out += entries[i].cmdline;
                 out += "\n";
             }
