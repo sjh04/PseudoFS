@@ -14,8 +14,10 @@
 ## Quick Start
 
 ```bash
-# 安装依赖
-sudo apt install build-essential cmake libncurses5-dev libncursesw5-dev
+# 安装依赖（Ubuntu 22.04 / 24.04 / WSL）
+# 先刷新索引，否则可能 404（请求的旧版本已被镜像替换）
+sudo apt-get update
+sudo apt-get install -y build-essential cmake libncurses-dev
 
 # 构建
 mkdir build && cd build
