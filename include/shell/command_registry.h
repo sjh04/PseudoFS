@@ -29,6 +29,24 @@ class CommandRegistry {
         std::string usage;
     };
 
+    // A command-line token plus whether it was double-quoted. Quoted tokens are
+    // exempt from glob expansion (so `write 0 "*"` writes a literal asterisk).
+    struct Token {
+        std::string text;
+        bool quoted;
+    };
+
+    // Like tokenize(), but also reports per-token quoting. tokenize() delegates
+    // here and drops the flags.
+    static std::vector<Token> tokenize_ex(const std::string& cmdline);
+
+    // Expand shell wildcards (`*`, `?`) in `tokens` against `fs`, returning the
+    // resulting argument list. An unquoted token with metacharacters is
+    // replaced by the sorted set of matching paths; if nothing matches it is
+    // left literal (nullglob off, matching common shell behavior).
+    static std::vector<std::string> expand_globs(IFileSystem& fs,
+                                                  const std::vector<Token>& tokens);
+
     // Sorted by insertion order, not alphabetically
     std::vector<std::pair<std::string, CmdEntry>> commands_;
 };

@@ -43,6 +43,65 @@ static std::string open_error(IFileSystem& fs, const std::string& path) {
     return "permission denied";
 }
 
+// Join a directory path and an entry name. "" means the cwd (so the name is
+// used bare, resolving against the cwd).
+static std::string join_path(const std::string& base, const char* name) {
+    if (base.empty()) return std::string(name);
+    if (base == "/") return "/" + std::string(name);
+    return base + "/" + std::string(name);
+}
+
+// Append one `ll` detail line for an entry to `out`:
+//   <type+rwx>  <nlink>  <owner>  <size>  <mtime>  <display>[/ | @ -> target]
+// `full` is the path used for stat/readlink; `display` is the text shown.
+static void append_ll_line(IFileSystem& fs, UserManager& um,
+                           const std::string& full, const std::string& display,
+                           uint8_t type, std::string& out) {
+    FileStat st{};
+    fs.fs_stat(full.c_str(), st);
+
+    // Permission column: type char + rwx triplets, e.g. drwxr-xr-x.
+    char perm[11];
+    perm[0] = (type == TYPE_DIR) ? 'd' : (type == TYPE_SYMLINK) ? 'l' : '-';
+    const char* rwx = "rwxrwxrwx";
+    for (int i = 0; i < 9; ++i)
+        perm[i + 1] = (st.mode & (1 << (8 - i))) ? rwx[i] : '-';
+    perm[10] = '\0';
+
+    // Owner: username if known, else the raw uid.
+    char owner[16];
+    const UserRecord* u = um.find_user(st.uid);
+    if (u != nullptr)
+        std::snprintf(owner, sizeof(owner), "%s", u->username);
+    else
+        std::snprintf(owner, sizeof(owner), "%u", st.uid);
+
+    // Modification time as "MM-DD HH:MM".
+    char when[16] = "-";
+    std::time_t t = static_cast<std::time_t>(st.mtime);
+    std::tm* lt = std::localtime(&t);
+    if (lt) std::strftime(when, sizeof(when), "%m-%d %H:%M", lt);
+
+    // Name suffix: "/" for dirs, "@ -> target" for symlinks.
+    std::string suffix;
+    if (type == TYPE_DIR) {
+        suffix = "/";
+    } else if (type == TYPE_SYMLINK) {
+        std::string tgt;
+        suffix = (fs.fs_readlink(full.c_str(), tgt) == 0) ? "@ -> " + tgt : "@";
+    }
+
+    // Fixed-width prefix via snprintf; append name+suffix as a string so a long
+    // symlink target is never truncated.
+    char head[64];
+    std::snprintf(head, sizeof(head), "%s %2u %-8s %6u  %s  ", perm, st.nlink,
+                  owner, st.size, when);
+    out += head;
+    out += display;
+    out += suffix;
+    out += "\n";
+}
+
 static void register_commands(CommandRegistry& reg) {
     reg.register_cmd(
         "login",
@@ -285,14 +344,20 @@ static void register_commands(CommandRegistry& reg) {
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string& out) -> int {
             if (args.empty()) {
-                out = "Usage: rmdir <path>";
+                out = "Usage: rmdir <path>...";
                 return -1;
             }
-            int ret = fs.fs_rmdir(args[0].c_str());
-            if (ret != 0) out = "rmdir: directory not empty or not found";
-            return ret;
+            int rc = 0;
+            for (auto& d : args) {
+                if (fs.fs_rmdir(d.c_str()) != 0) {
+                    out += "rmdir: '" + d + "': not empty or not found\n";
+                    rc = -1;
+                }
+            }
+            while (!out.empty() && out.back() == '\n') out.pop_back();
+            return rc;
         },
-        "rmdir <path> — remove empty directory");
+        "rmdir <path>... — remove empty directories");
 
     reg.register_cmd(
         "cd",
@@ -321,108 +386,107 @@ static void register_commands(CommandRegistry& reg) {
         "ls",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string& out) -> int {
-            const char* path = args.empty() ? "" : args[0].c_str();
-            std::vector<DirEntry> entries;
-            int ret = fs.fs_ls(path, entries);
-            if (ret != 0) {
-                out = "ls: cannot list";
-                return ret;
-            }
-            out.clear();
-            for (auto& e : entries) {
-                if (e.type == TYPE_DIR) {
-                    out += "\033[32m";  // green
-                    out += e.name;
-                    out += "/\033[0m";
-                } else if (e.type == TYPE_SYMLINK) {
-                    out += "\033[36m";  // cyan
-                    out += e.name;
-                    out += "@\033[0m";
+            // Append a name colored by type (dir=green/, symlink=cyan@, plain).
+            auto paint = [](std::string& dst, const std::string& name, uint8_t type) {
+                if (type == TYPE_DIR) {
+                    dst += "\033[32m";
+                    dst += name;
+                    dst += "/\033[0m";
+                } else if (type == TYPE_SYMLINK) {
+                    dst += "\033[36m";
+                    dst += name;
+                    dst += "@\033[0m";
                 } else {
-                    out += e.name;
+                    dst += name;
                 }
-                out += "  ";
+                dst += "  ";
+            };
+
+            int rc = 0;
+            bool multi = args.size() > 1;
+            std::vector<std::string> targets = args;
+            if (targets.empty()) targets.push_back("");  // cwd
+
+            std::string files;  // file/symlink args, listed together first
+            std::string dirs;   // directory args, each with a header when multi
+            for (const std::string& tp : targets) {
+                FileStat st{};
+                if (!tp.empty() && fs.fs_stat(tp.c_str(), st) != 0) {
+                    dirs += "ls: cannot access '" + tp + "'\n";
+                    rc = -1;
+                    continue;
+                }
+                bool is_dir = tp.empty() || st.type == TYPE_DIR;
+                if (is_dir) {
+                    std::vector<DirEntry> entries;
+                    if (fs.fs_ls(tp.c_str(), entries) != 0) {
+                        dirs += "ls: cannot list '" + tp + "'\n";
+                        rc = -1;
+                        continue;
+                    }
+                    std::string body;
+                    for (auto& e : entries) paint(body, e.name, e.type);
+                    if (body.empty()) body = "(empty)";
+                    if (multi) dirs += (tp.empty() ? "." : tp) + ":\n";
+                    dirs += body + "\n";
+                } else {
+                    paint(files, tp, st.type);  // a matched file (e.g. ls *.txt)
+                }
             }
+
+            out.clear();
+            if (!files.empty()) {
+                out += files;
+                if (!dirs.empty()) out += "\n";
+            }
+            out += dirs;
+            while (!out.empty() && out.back() == '\n') out.pop_back();
             if (out.empty()) out = "(empty)";
-            return 0;
+            return rc;
         },
-        "ls [path] — list directory");
+        "ls [path]... — list directories / files");
 
     reg.register_cmd(
         "ll",
         [](IFileSystem& fs, UserManager& um, const std::vector<std::string>& args,
            std::string& out) -> int {
-            std::string base = args.empty() ? std::string() : args[0];
-            std::vector<DirEntry> entries;
-            int ret = fs.fs_ls(base.c_str(), entries);
-            if (ret != 0) {
-                out = "ll: cannot list";
-                return ret;
-            }
             out.clear();
-            for (auto& e : entries) {
-                // Stat the entry by its full path. Statting bare e.name would
-                // resolve against the cwd, which is wrong whenever ll targets a
-                // different directory (e.g. "ll /home").
-                std::string full;
-                if (base.empty())
-                    full = e.name;
-                else if (base == "/")
-                    full = "/" + std::string(e.name);
-                else
-                    full = base + "/" + std::string(e.name);
+            int rc = 0;
+            bool multi = args.size() > 1;
+            std::vector<std::string> targets = args;
+            if (targets.empty()) targets.push_back("");  // cwd
 
+            for (const std::string& tp : targets) {
                 FileStat st{};
-                fs.fs_stat(full.c_str(), st);
-
-                // Permission column: type char + rwx triplets, e.g. drwxr-xr-x.
-                char perm[11];
-                perm[0] = (e.type == TYPE_DIR)       ? 'd'
-                          : (e.type == TYPE_SYMLINK) ? 'l'
-                                                     : '-';
-                const char* rwx = "rwxrwxrwx";
-                for (int i = 0; i < 9; ++i)
-                    perm[i + 1] = (st.mode & (1 << (8 - i))) ? rwx[i] : '-';
-                perm[10] = '\0';
-
-                // Owner: username if known, else the raw uid.
-                char owner[16];
-                const UserRecord* u = um.find_user(st.uid);
-                if (u != nullptr)
-                    std::snprintf(owner, sizeof(owner), "%s", u->username);
-                else
-                    std::snprintf(owner, sizeof(owner), "%u", st.uid);
-
-                // Modification time as "MM-DD HH:MM".
-                char when[16] = "-";
-                std::time_t t = static_cast<std::time_t>(st.mtime);
-                std::tm* lt = std::localtime(&t);
-                if (lt) std::strftime(when, sizeof(when), "%m-%d %H:%M", lt);
-
-                // Name suffix: "/" for dirs, "@ -> target" for symlinks.
-                std::string suffix;
-                if (e.type == TYPE_DIR) {
-                    suffix = "/";
-                } else if (e.type == TYPE_SYMLINK) {
-                    std::string tgt;
-                    suffix = (fs.fs_readlink(full.c_str(), tgt) == 0)
-                                 ? "@ -> " + tgt
-                                 : "@";
+                if (!tp.empty() && fs.fs_stat(tp.c_str(), st) != 0) {
+                    out += "ll: cannot access '" + tp + "'\n";
+                    rc = -1;
+                    continue;
                 }
-                // Fixed-width prefix via snprintf; append name+suffix as a
-                // string so a long symlink target is never truncated.
-                char head[64];
-                std::snprintf(head, sizeof(head), "%s %2u %-8s %6u  %s  ", perm,
-                              st.nlink, owner, st.size, when);
-                out += head;
-                out += e.name;
-                out += suffix;
-                out += "\n";
+                bool is_dir = tp.empty() || st.type == TYPE_DIR;
+                if (is_dir) {
+                    std::vector<DirEntry> entries;
+                    if (fs.fs_ls(tp.c_str(), entries) != 0) {
+                        out += "ll: cannot list '" + tp + "'\n";
+                        rc = -1;
+                        continue;
+                    }
+                    if (multi) out += (tp.empty() ? "." : tp) + ":\n";
+                    // Stat each entry by its full path (bare e.name would resolve
+                    // against the cwd, wrong when listing another directory).
+                    for (auto& e : entries)
+                        append_ll_line(fs, um, join_path(tp, e.name), e.name,
+                                       e.type, out);
+                } else {
+                    // A file/symlink argument (e.g. from "ll *.txt").
+                    append_ll_line(fs, um, tp, tp, st.type, out);
+                }
             }
+            while (!out.empty() && out.back() == '\n') out.pop_back();
             if (out.empty()) out = "(empty)";
-            return 0;
+            return rc;
         },
-        "ll [path] — detailed listing (perm/links/owner/size/mtime)");
+        "ll [path]... — detailed listing (perm/links/owner/size/mtime)");
 
     reg.register_cmd(
         "touch",
@@ -442,28 +506,33 @@ static void register_commands(CommandRegistry& reg) {
         "rm",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string& out) -> int {
-            if (args.empty()) {
-                out = "Usage: rm [-r] <path>";
-                return -1;
-            }
             bool recursive = false;
-            std::string target;
+            std::vector<std::string> targets;
             for (auto& a : args) {
                 if (a == "-r" || a == "-rf")
                     recursive = true;
                 else
-                    target = a;
+                    targets.push_back(a);
             }
-            if (target.empty()) {
-                out = "Usage: rm [-r] <path>";
+            if (targets.empty()) {
+                out = "Usage: rm [-r] <path>...";
                 return -1;
             }
-            int ret =
-                recursive ? fs.fs_delete_recursive(target.c_str()) : fs.fs_delete(target.c_str());
-            if (ret != 0) out = "rm: failed";
-            return ret;
+            // Remove every target (so a glob like "rm *.log" deletes them all);
+            // report each failure but keep going.
+            int rc = 0;
+            for (auto& t : targets) {
+                int ret = recursive ? fs.fs_delete_recursive(t.c_str())
+                                    : fs.fs_delete(t.c_str());
+                if (ret != 0) {
+                    out += "rm: cannot remove '" + t + "'\n";
+                    rc = -1;
+                }
+            }
+            while (!out.empty() && out.back() == '\n') out.pop_back();
+            return rc;
         },
-        "rm [-r] <path> — delete file or directory");
+        "rm [-r] <path>... — delete files or directories");
 
     reg.register_cmd(
         "open",
@@ -572,73 +641,91 @@ static void register_commands(CommandRegistry& reg) {
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string& out) -> int {
             if (args.empty()) {
-                out = "Usage: cat <file>";
+                out = "Usage: cat <file>...";
                 return -1;
             }
-            int fd = fs.fs_open(args[0].c_str(), O_READ);
-            if (fd < 0) {
-                out = "cat: " + open_error(fs, args[0]);
-                return -1;
+            out.clear();
+            int rc = 0;
+            for (auto& f : args) {
+                int fd = fs.fs_open(f.c_str(), O_READ);
+                if (fd < 0) {
+                    out += "cat: " + f + ": " + open_error(fs, f) + "\n";
+                    rc = -1;
+                    continue;
+                }
+                std::vector<char> buf(8192, 0);
+                ssize_t n = fs.fs_read(fd, buf.data(), buf.size() - 1);
+                fs.fs_close(fd);
+                if (n < 0) {
+                    out += "cat: " + f + ": read error\n";
+                    rc = -1;
+                    continue;
+                }
+                out.append(buf.data(), n);
             }
-            std::vector<char> buf(8192, 0);
-            ssize_t n = fs.fs_read(fd, buf.data(), buf.size() - 1);
-            fs.fs_close(fd);
-            if (n < 0) {
-                out = "cat: read error";
-                return -1;
-            }
-            out = std::string(buf.data(), n);
-            return 0;
+            return rc;
         },
-        "cat <file> — display file content");
+        "cat <file>... — display file content");
 
     reg.register_cmd(
         "stat",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string& out) -> int {
             if (args.empty()) {
-                out = "Usage: stat <path>";
+                out = "Usage: stat <path>...";
                 return -1;
             }
-            FileStat st{};
-            int ret = fs.fs_stat(args[0].c_str(), st);
-            if (ret != 0) {
-                out = "stat: not found";
-                return ret;
+            out.clear();
+            int rc = 0;
+            for (const std::string& p : args) {
+                FileStat st{};
+                if (fs.fs_stat(p.c_str(), st) != 0) {
+                    out += "stat: '" + p + "': not found\n";
+                    rc = -1;
+                    continue;
+                }
+                const char* type_str = st.type == TYPE_DIR       ? "directory"
+                                       : st.type == TYPE_SYMLINK ? "symlink"
+                                                                 : "file";
+                char buf[256];
+                std::snprintf(buf, sizeof(buf),
+                              "File: %s\nType: %s\nMode: %04o\nUID: %u  GID: %u\n"
+                              "Size: %u bytes\nLinks: %u",
+                              p.c_str(), type_str, st.mode & 0x1FF, st.uid,
+                              st.gid, st.size, st.nlink);
+                out += buf;
+                if (st.type == TYPE_SYMLINK) {
+                    std::string tgt;
+                    if (fs.fs_readlink(p.c_str(), tgt) == 0)
+                        out += "\nTarget: " + tgt;
+                }
+                out += "\n";
             }
-            const char* type_str = st.type == TYPE_DIR       ? "directory"
-                                   : st.type == TYPE_SYMLINK ? "symlink"
-                                                             : "file";
-            char buf[256];
-            std::snprintf(buf, sizeof(buf),
-                          "Type: %s\nMode: %04o\nUID: %u  GID: %u\n"
-                          "Size: %u bytes\nLinks: %u",
-                          type_str, st.mode & 0x1FF, st.uid,
-                          st.gid, st.size, st.nlink);
-            out = buf;
-            if (st.type == TYPE_SYMLINK) {
-                std::string tgt;
-                if (fs.fs_readlink(args[0].c_str(), tgt) == 0)
-                    out += "\nTarget: " + tgt;
-            }
-            return 0;
+            while (!out.empty() && out.back() == '\n') out.pop_back();
+            return rc;
         },
-        "stat <path> — file/directory info");
+        "stat <path>... — file/directory info");
 
     reg.register_cmd(
         "chmod",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string& out) -> int {
             if (args.size() < 2) {
-                out = "Usage: chmod <mode> <path>";
+                out = "Usage: chmod <mode> <path>...";
                 return -1;
             }
             uint16_t mode = static_cast<uint16_t>(std::stoi(args[0], nullptr, 8));
-            int ret = fs.fs_chmod(args[1].c_str(), mode);
-            if (ret != 0) out = "chmod: failed";
-            return ret;
+            int rc = 0;
+            for (size_t i = 1; i < args.size(); ++i) {
+                if (fs.fs_chmod(args[i].c_str(), mode) != 0) {
+                    out += "chmod: '" + args[i] + "': failed\n";
+                    rc = -1;
+                }
+            }
+            while (!out.empty() && out.back() == '\n') out.pop_back();
+            return rc;
         },
-        "chmod <mode> <path> — change permissions");
+        "chmod <mode> <path>... — change permissions");
 
     reg.register_cmd(
         "ln",

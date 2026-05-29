@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <cstring>
 #include <stdexcept>
 #include <string>
 
@@ -180,6 +181,89 @@ TEST(CommandRegistryTest, ExecuteCatchesGenericException) {
     int ret = reg.execute("boom", fs, um, output);
     EXPECT_EQ(ret, -1);
     EXPECT_EQ(output, "boom: error: kaboom");
+}
+
+// --- Wildcard (glob) expansion ---
+
+// A stub whose directory always contains the same three entries, returned out
+// of alphabetical order so the sort in expansion is exercised.
+class GlobFs : public StubFs {
+   public:
+    int fs_ls(const char*, std::vector<DirEntry>& out) override {
+        out.clear();
+        const char* names[] = {"b.txt", "c.log", "a.txt"};
+        for (const char* n : names) {
+            DirEntry e{};
+            std::strncpy(e.name, n, sizeof(e.name) - 1);
+            e.type = TYPE_FILE;
+            out.push_back(e);
+        }
+        return 0;
+    }
+};
+
+// Run `line` and return the argument list the (only) command actually received.
+static std::vector<std::string> captured_args(const std::string& line) {
+    CommandRegistry reg;
+    std::vector<std::string> captured;
+    reg.register_cmd(
+        "cmd",
+        [&captured](IFileSystem&, UserManager&, const std::vector<std::string>& args,
+                    std::string&) -> int {
+            captured = args;
+            return 0;
+        },
+        "cmd");
+    GlobFs fs;
+    UserManager um;
+    std::string out;
+    reg.execute(line, fs, um, out);
+    return captured;
+}
+
+TEST(GlobTest, StarExpandsAndSorts) {
+    auto a = captured_args("cmd *.txt");
+    ASSERT_EQ(a.size(), 2u);
+    EXPECT_EQ(a[0], "a.txt");  // sorted, though the dir returned b.txt first
+    EXPECT_EQ(a[1], "b.txt");
+}
+
+TEST(GlobTest, StarMatchesSingleExtension) {
+    auto a = captured_args("cmd *.log");
+    ASSERT_EQ(a.size(), 1u);
+    EXPECT_EQ(a[0], "c.log");
+}
+
+TEST(GlobTest, QuestionMarkMatchesOneChar) {
+    auto a = captured_args("cmd ?.txt");
+    ASSERT_EQ(a.size(), 2u);
+    EXPECT_EQ(a[0], "a.txt");
+    EXPECT_EQ(a[1], "b.txt");
+}
+
+TEST(GlobTest, QuotedPatternIsNotExpanded) {
+    auto a = captured_args("cmd \"*.txt\"");
+    ASSERT_EQ(a.size(), 1u);
+    EXPECT_EQ(a[0], "*.txt");  // quotes exempt it from globbing
+}
+
+TEST(GlobTest, NoMatchKeepsLiteralPattern) {
+    auto a = captured_args("cmd *.none");
+    ASSERT_EQ(a.size(), 1u);
+    EXPECT_EQ(a[0], "*.none");  // nullglob off: literal pattern passes through
+}
+
+TEST(GlobTest, PlainArgUnchanged) {
+    auto a = captured_args("cmd hello");
+    ASSERT_EQ(a.size(), 1u);
+    EXPECT_EQ(a[0], "hello");
+}
+
+TEST(GlobTest, DirPrefixPreserved) {
+    auto a = captured_args("cmd sub/*.txt");
+    ASSERT_EQ(a.size(), 2u);
+    EXPECT_EQ(a[0], "sub/a.txt");  // matches are re-prefixed with the dir part
+    EXPECT_EQ(a[1], "sub/b.txt");
 }
 
 }  // namespace
