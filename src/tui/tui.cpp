@@ -299,7 +299,7 @@ void Tui::run() {
     initscr();
     cbreak();
     noecho();
-    curs_set(0);
+    curs_set(1);  // visible cursor in the terminal input line
     keypad(stdscr, TRUE);
     mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, nullptr);
     start_color();
@@ -360,6 +360,10 @@ void Tui::run() {
 
     running_ = true;
     while (running_) {
+        // Park the hardware cursor at the input point before blocking on a key.
+        // Panel/title refreshes (incl. the clock tick) leave it elsewhere; this
+        // brings it back into the terminal window so curs_set(1) shows it there.
+        wrefresh(w.term_win);
         int ch = wgetch(w.term_win);
 
         if (ch == ERR) {  // 1s timeout, no key: refresh the clock and keep waiting
