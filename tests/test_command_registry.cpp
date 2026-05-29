@@ -1,5 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <stdexcept>
+#include <string>
+
 #include "core/user_manager.h"
 #include "shell/command_registry.h"
 #include "stub_fs.h"
@@ -138,6 +141,45 @@ TEST(CommandRegistryTest, ExecuteEmptyCommandLine) {
     int ret = reg.execute("   ", fs, um, output);
     EXPECT_EQ(ret, 0);
     EXPECT_TRUE(output.empty());
+}
+
+// Regression: a handler that throws (e.g. std::stoi on a non-numeric arg like
+// "close abc") must not propagate out of execute() and terminate the process.
+// Previously this aborted the whole program — in the TUI that silently dropped
+// the user out of the interface.
+TEST(CommandRegistryTest, ExecuteCatchesInvalidArgument) {
+    CommandRegistry reg;
+    reg.register_cmd(
+        "needsnum",
+        [](IFileSystem&, UserManager&, const std::vector<std::string>& args,
+           std::string& output) -> int {
+            output = std::to_string(std::stoi(args.at(0)));
+            return 0;
+        },
+        "needsnum <n>");
+
+    StubFs fs;
+    UserManager um;
+    std::string output;
+    int ret = reg.execute("needsnum abc", fs, um, output);
+    EXPECT_EQ(ret, -1);
+    EXPECT_EQ(output, "needsnum: invalid numeric argument");
+}
+
+TEST(CommandRegistryTest, ExecuteCatchesGenericException) {
+    CommandRegistry reg;
+    reg.register_cmd(
+        "boom",
+        [](IFileSystem&, UserManager&, const std::vector<std::string>&,
+           std::string&) -> int { throw std::runtime_error("kaboom"); },
+        "boom");
+
+    StubFs fs;
+    UserManager um;
+    std::string output;
+    int ret = reg.execute("boom", fs, um, output);
+    EXPECT_EQ(ret, -1);
+    EXPECT_EQ(output, "boom: error: kaboom");
 }
 
 }  // namespace
