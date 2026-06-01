@@ -194,15 +194,14 @@ void SuperBlock::collect_free_blocks(std::vector<uint16_t>& out) {
     uint16_t link = (sb_.s_nfree >= 1) ? sb_.s_free[0] : END_OF_CHAIN;
     uint8_t buf[BLOCK_SIZE];
     // Bound the walk by the data-block count to survive a corrupt/cyclic chain.
-    for (uint32_t guard = 0; link != END_OF_CHAIN && guard < DATA_BLK_NUM;
-         ++guard) {
+    for (uint32_t guard = 0; link != END_OF_CHAIN && guard < DATA_BLK_NUM; ++guard) {
         out.push_back(link);  // the storage block itself is a free block
         dev_.read_block(DATA_START_BLK + link, buf);
         auto* grp = reinterpret_cast<uint16_t*>(buf);
         uint16_t count = grp[0];
-        uint16_t next = grp[1];  // entry[0] = link to next group
+        uint16_t next = grp[1];                    // entry[0] = link to next group
         if (count == 0 || count > NICFREE) break;  // corrupt group
-        for (uint16_t i = 2; i <= count; i++) {     // entry[1..count-1]
+        for (uint16_t i = 2; i <= count; i++) {    // entry[1..count-1]
             out.push_back(grp[i]);
         }
         link = next;

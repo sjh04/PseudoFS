@@ -29,10 +29,7 @@ struct TestHarness {
     std::string output;
     int ret = 0;
 
-    TestHarness()
-        : dev(TOTAL_BLK_NUM, BLOCK_SIZE),
-          unix_fs(dev),
-          fat16_fs(dev) {
+    TestHarness() : dev(TOTAL_BLK_NUM, BLOCK_SIZE), unix_fs(dev), fat16_fs(dev) {
         unix_fs.set_disk_path("test_e2e.img");
         fat16_fs.set_disk_path("test_e2e_fat16.img");
     }
@@ -43,8 +40,12 @@ struct TestHarness {
         return ret;
     }
 
-    int exec_unix(const std::string& cmd) { return exec(unix_fs, cmd); }
-    int exec_fat(const std::string& cmd) { return exec(fat16_fs, cmd); }
+    int exec_unix(const std::string& cmd) {
+        return exec(unix_fs, cmd);
+    }
+    int exec_fat(const std::string& cmd) {
+        return exec(fat16_fs, cmd);
+    }
 };
 
 // --- Registration (mirrors main.cpp) ---
@@ -56,249 +57,364 @@ void register_all(CommandRegistry& reg) {
            std::string& out) -> int {
             if (args.size() < 2) return -1;
             int uid = um.login(args[0].c_str(), args[1].c_str());
-            if (uid < 0) { out = "Login failed."; return -1; }
+            if (uid < 0) {
+                out = "Login failed.";
+                return -1;
+            }
             out = "Welcome, " + um.current_username();
             return 0;
-        }, "");
-    reg.register_cmd("logout",
-        [](IFileSystem&, UserManager& um, const std::vector<std::string>&,
-           std::string&) -> int { return um.logout(); }, "");
-    reg.register_cmd("useradd",
+        },
+        "");
+    reg.register_cmd(
+        "logout",
+        [](IFileSystem&, UserManager& um, const std::vector<std::string>&, std::string&) -> int {
+            return um.logout();
+        },
+        "");
+    reg.register_cmd(
+        "useradd",
         [](IFileSystem& fs, UserManager& um, const std::vector<std::string>& args,
            std::string& out) -> int {
             if (args.size() < 4) return -1;
             uint16_t uid = static_cast<uint16_t>(std::stoi(args[2]));
             uint16_t gid = static_cast<uint16_t>(std::stoi(args[3]));
-            if (um.add_user(args[0].c_str(), args[1].c_str(), uid, gid) != 0)
-                return -1;
+            if (um.add_user(args[0].c_str(), args[1].c_str(), uid, gid) != 0) return -1;
             fs.fs_mkdir("/home");
             fs.fs_mkdir(("/home/" + args[0]).c_str());
             return 0;
-        }, "");
-    reg.register_cmd("passwd",
+        },
+        "");
+    reg.register_cmd(
+        "passwd",
         [](IFileSystem&, UserManager& um, const std::vector<std::string>& args,
            std::string&) -> int {
             if (args.size() < 2) return -1;
-            return um.change_password(um.current_uid(), args[0].c_str(),
-                                      args[1].c_str());
-        }, "");
-    reg.register_cmd("mkdir",
+            return um.change_password(um.current_uid(), args[0].c_str(), args[1].c_str());
+        },
+        "");
+    reg.register_cmd(
+        "mkdir",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string&) -> int {
-            bool p=false; std::string path;
-            for(auto& a:args){if(a=="-p")p=true;else path=a;}
-            if(path.empty())return -1;
-            if(!p)return fs.fs_mkdir(path.c_str());
-            std::string cur; size_t pos=0;
-            if(path[0]=='/'){cur="/";pos=1;}
-            while(pos<path.size()){
-                size_t s=path.find('/',pos);
-                if(s==std::string::npos)s=path.size();
-                if(s>pos){cur+=path.substr(pos,s-pos);fs.fs_mkdir(cur.c_str());cur+="/";}
-                pos=s+1;
+            bool p = false;
+            std::string path;
+            for (auto& a : args) {
+                if (a == "-p")
+                    p = true;
+                else
+                    path = a;
             }
-            FileStat st; return fs.fs_stat(path.c_str(),st)==0?0:-1;
-        }, "");
-    reg.register_cmd("su",
+            if (path.empty()) return -1;
+            if (!p) return fs.fs_mkdir(path.c_str());
+            std::string cur;
+            size_t pos = 0;
+            if (path[0] == '/') {
+                cur = "/";
+                pos = 1;
+            }
+            while (pos < path.size()) {
+                size_t s = path.find('/', pos);
+                if (s == std::string::npos) s = path.size();
+                if (s > pos) {
+                    cur += path.substr(pos, s - pos);
+                    fs.fs_mkdir(cur.c_str());
+                    cur += "/";
+                }
+                pos = s + 1;
+            }
+            FileStat st;
+            return fs.fs_stat(path.c_str(), st) == 0 ? 0 : -1;
+        },
+        "");
+    reg.register_cmd(
+        "su",
         [](IFileSystem&, UserManager& um, const std::vector<std::string>& args,
            std::string&) -> int {
-            if(args.empty())return -1;
-            const UserRecord* u=um.find_user(args[0].c_str());
-            if(!u){u=um.find_user(static_cast<uint16_t>(std::stoi(args[0])));}
-            if(!u)return -1;
-            return um.su(u->uid,args.size()>1?args[1].c_str():nullptr);
-        }, "");
-    reg.register_cmd("more",
+            if (args.empty()) return -1;
+            const UserRecord* u = um.find_user(args[0].c_str());
+            if (!u) {
+                u = um.find_user(static_cast<uint16_t>(std::stoi(args[0])));
+            }
+            if (!u) return -1;
+            return um.su(u->uid, args.size() > 1 ? args[1].c_str() : nullptr);
+        },
+        "");
+    reg.register_cmd(
+        "more",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string& out) -> int {
-            if(args.empty())return -1;
-            int fd=fs.fs_open(args[0].c_str(),O_READ); if(fd<0)return -1;
-            std::vector<char> b(65536,0); ssize_t n=fs.fs_read(fd,b.data(),b.size()-1);
-            fs.fs_close(fd); if(n<0)return -1;
-            out.assign(b.data(),n); return 0;
-        }, "");
-    reg.register_cmd("find",
+            if (args.empty()) return -1;
+            int fd = fs.fs_open(args[0].c_str(), O_READ);
+            if (fd < 0) return -1;
+            std::vector<char> b(65536, 0);
+            ssize_t n = fs.fs_read(fd, b.data(), b.size() - 1);
+            fs.fs_close(fd);
+            if (n < 0) return -1;
+            out.assign(b.data(), n);
+            return 0;
+        },
+        "");
+    reg.register_cmd(
+        "find",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string& out) -> int {
-            if(args.size()<2)return -1;
-            std::string pat=args[1]; out.clear();
-            std::function<void(const std::string&)> s=[&](const std::string& d){
+            if (args.size() < 2) return -1;
+            std::string pat = args[1];
+            out.clear();
+            std::function<void(const std::string&)> s = [&](const std::string& d) {
                 std::vector<DirEntry> es;
-                if(fs.fs_ls(d.c_str(),es)!=0)return;
-                for(auto& e:es){
-                    if(std::strcmp(e.name,".")==0||std::strcmp(e.name,"..")==0)continue;
-                    std::string f=(d=="/")?"/"+std::string(e.name):d+"/"+e.name;
-                    if(std::string(e.name).find(pat)!=std::string::npos)out+=f+"\n";
-                    if(e.type==TYPE_DIR)s(f);
+                if (fs.fs_ls(d.c_str(), es) != 0) return;
+                for (auto& e : es) {
+                    if (std::strcmp(e.name, ".") == 0 || std::strcmp(e.name, "..") == 0) continue;
+                    std::string f = (d == "/") ? "/" + std::string(e.name) : d + "/" + e.name;
+                    if (std::string(e.name).find(pat) != std::string::npos) out += f + "\n";
+                    if (e.type == TYPE_DIR) s(f);
                 }
             };
-            s(args[0]); if(out.empty())out="(no matches)"; return 0;
-        }, "");
-    reg.register_cmd("rmdir",
+            s(args[0]);
+            if (out.empty()) out = "(no matches)";
+            return 0;
+        },
+        "");
+    reg.register_cmd(
+        "rmdir",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string&) -> int {
             if (args.empty()) return -1;
             return fs.fs_rmdir(args[0].c_str());
-        }, "");
-    reg.register_cmd("cd",
+        },
+        "");
+    reg.register_cmd(
+        "cd",
         [](IFileSystem& fs, UserManager& um, const std::vector<std::string>& args,
            std::string&) -> int {
             std::string p = args.empty() ? "/" : args[0];
-            if (!p.empty() && p[0] == '~')
-                p = "/home/" + um.current_username() + p.substr(1);
+            if (!p.empty() && p[0] == '~') p = "/home/" + um.current_username() + p.substr(1);
             return fs.fs_chdir(p.c_str());
-        }, "");
-    reg.register_cmd("pwd",
+        },
+        "");
+    reg.register_cmd(
+        "pwd",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>&,
-           std::string& out) -> int { out = fs.fs_pwd(); return 0; }, "");
-    reg.register_cmd("ls",
+           std::string& out) -> int {
+            out = fs.fs_pwd();
+            return 0;
+        },
+        "");
+    reg.register_cmd(
+        "ls",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string& out) -> int {
             std::vector<DirEntry> e;
             fs.fs_ls(args.empty() ? "" : args[0].c_str(), e);
-            for (auto& d : e) { out += d.name; out += " "; }
+            for (auto& d : e) {
+                out += d.name;
+                out += " ";
+            }
             return 0;
-        }, "");
-    reg.register_cmd("touch",
+        },
+        "");
+    reg.register_cmd(
+        "touch",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string&) -> int {
             if (args.empty()) return -1;
             return fs.fs_create(args[0].c_str(), DEFAULT_MODE);
-        }, "");
-    reg.register_cmd("rm",
+        },
+        "");
+    reg.register_cmd(
+        "rm",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string&) -> int {
             if (args.empty()) return -1;
-            bool rec = false; std::string t;
+            bool rec = false;
+            std::string t;
             for (auto& a : args) {
-                if (a == "-r") rec = true; else t = a;
+                if (a == "-r")
+                    rec = true;
+                else
+                    t = a;
             }
-            return rec ? fs.fs_delete_recursive(t.c_str())
-                       : fs.fs_delete(t.c_str());
-        }, "");
-    reg.register_cmd("open",
+            return rec ? fs.fs_delete_recursive(t.c_str()) : fs.fs_delete(t.c_str());
+        },
+        "");
+    reg.register_cmd(
+        "open",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string& out) -> int {
             if (args.empty()) return -1;
             int fl = O_READ;
             if (args.size() > 1) {
-                if (args[1]=="w") fl=O_WRITE;
-                else if (args[1]=="rw") fl=O_READ|O_WRITE;
-                else if (args[1]=="a") fl=O_WRITE|O_APPEND;
+                if (args[1] == "w")
+                    fl = O_WRITE;
+                else if (args[1] == "rw")
+                    fl = O_READ | O_WRITE;
+                else if (args[1] == "a")
+                    fl = O_WRITE | O_APPEND;
             }
             int fd = fs.fs_open(args[0].c_str(), fl);
-            if (fd<0) return -1;
-            out = std::to_string(fd); return 0;
-        }, "");
-    reg.register_cmd("close",
+            if (fd < 0) return -1;
+            out = std::to_string(fd);
+            return 0;
+        },
+        "");
+    reg.register_cmd(
+        "close",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string&) -> int {
             if (args.empty()) return -1;
             return fs.fs_close(std::stoi(args[0]));
-        }, "");
-    reg.register_cmd("read",
+        },
+        "");
+    reg.register_cmd(
+        "read",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string& out) -> int {
             if (args.empty()) return -1;
             int fd = std::stoi(args[0]);
-            size_t len = args.size()>1 ? std::stoul(args[1]) : 4096;
-            std::vector<char> b(len+1,0);
+            size_t len = args.size() > 1 ? std::stoul(args[1]) : 4096;
+            std::vector<char> b(len + 1, 0);
             ssize_t n = fs.fs_read(fd, b.data(), len);
-            if (n<0) return -1;
-            out.assign(b.data(), n); return 0;
-        }, "");
-    reg.register_cmd("write",
+            if (n < 0) return -1;
+            out.assign(b.data(), n);
+            return 0;
+        },
+        "");
+    reg.register_cmd(
+        "write",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string& out) -> int {
-            if (args.size()<2) return -1;
+            if (args.size() < 2) return -1;
             int fd = std::stoi(args[0]);
-            std::string t; for(size_t i=1;i<args.size();++i){if(i>1)t+=" ";t+=args[i];}
-            ssize_t n=fs.fs_write(fd,t.c_str(),t.size());
-            if(n<0)return -1;
-            out=std::to_string(n);return 0;
-        }, "");
-    reg.register_cmd("cp",
+            std::string t;
+            for (size_t i = 1; i < args.size(); ++i) {
+                if (i > 1) t += " ";
+                t += args[i];
+            }
+            ssize_t n = fs.fs_write(fd, t.c_str(), t.size());
+            if (n < 0) return -1;
+            out = std::to_string(n);
+            return 0;
+        },
+        "");
+    reg.register_cmd(
+        "cp",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string&) -> int {
-            if (args.size()<2) return -1;
-            int s=fs.fs_open(args[0].c_str(),O_READ);
-            if(s<0)return -1;
-            fs.fs_create(args[1].c_str(),DEFAULT_MODE);
-            int d=fs.fs_open(args[1].c_str(),O_WRITE);
-            if(d<0){fs.fs_close(s);return -1;}
-            char b[4096]; ssize_t n;
-            while((n=fs.fs_read(s,b,sizeof(b)))>0) fs.fs_write(d,b,n);
-            fs.fs_close(s); fs.fs_close(d); return 0;
-        }, "");
-    reg.register_cmd("mv",
+            if (args.size() < 2) return -1;
+            int s = fs.fs_open(args[0].c_str(), O_READ);
+            if (s < 0) return -1;
+            fs.fs_create(args[1].c_str(), DEFAULT_MODE);
+            int d = fs.fs_open(args[1].c_str(), O_WRITE);
+            if (d < 0) {
+                fs.fs_close(s);
+                return -1;
+            }
+            char b[4096];
+            ssize_t n;
+            while ((n = fs.fs_read(s, b, sizeof(b))) > 0) fs.fs_write(d, b, n);
+            fs.fs_close(s);
+            fs.fs_close(d);
+            return 0;
+        },
+        "");
+    reg.register_cmd(
+        "mv",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string& out) -> int {
-            if (args.size()<2) return -1;
+            if (args.size() < 2) return -1;
             FileStat st;
-            if(fs.fs_stat(args[0].c_str(),st)!=0) return -1;
-            int s=fs.fs_open(args[0].c_str(),O_READ);
-            if(s<0)return -1;
-            fs.fs_create(args[1].c_str(),DEFAULT_MODE);
-            int d=fs.fs_open(args[1].c_str(),O_WRITE);
-            if(d<0){fs.fs_close(s);return -1;}
-            char b[4096]; ssize_t n;
-            while((n=fs.fs_read(s,b,sizeof(b)))>0) fs.fs_write(d,b,n);
-            fs.fs_close(s); fs.fs_close(d);
-            fs.fs_delete(args[0].c_str()); return 0;
-        }, "");
-    reg.register_cmd("stat",
+            if (fs.fs_stat(args[0].c_str(), st) != 0) return -1;
+            int s = fs.fs_open(args[0].c_str(), O_READ);
+            if (s < 0) return -1;
+            fs.fs_create(args[1].c_str(), DEFAULT_MODE);
+            int d = fs.fs_open(args[1].c_str(), O_WRITE);
+            if (d < 0) {
+                fs.fs_close(s);
+                return -1;
+            }
+            char b[4096];
+            ssize_t n;
+            while ((n = fs.fs_read(s, b, sizeof(b))) > 0) fs.fs_write(d, b, n);
+            fs.fs_close(s);
+            fs.fs_close(d);
+            fs.fs_delete(args[0].c_str());
+            return 0;
+        },
+        "");
+    reg.register_cmd(
+        "stat",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string& out) -> int {
-            if(args.empty())return -1;
+            if (args.empty()) return -1;
             FileStat st{};
-            if(fs.fs_stat(args[0].c_str(),st)!=0)return -1;
+            if (fs.fs_stat(args[0].c_str(), st) != 0) return -1;
             char b[256];
-            std::snprintf(b,sizeof(b),"size=%u type=%d",st.size,st.type);
-            out=b;return 0;
-        }, "");
-    reg.register_cmd("chmod",
+            std::snprintf(b, sizeof(b), "size=%u type=%d", st.size, st.type);
+            out = b;
+            return 0;
+        },
+        "");
+    reg.register_cmd(
+        "chmod",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string&) -> int {
-            if(args.size()<2)return -1;
+            if (args.size() < 2) return -1;
             return fs.fs_chmod(args[1].c_str(),
-                static_cast<uint16_t>(std::stoi(args[0],nullptr,8)));
-        }, "");
-    reg.register_cmd("disk",
+                               static_cast<uint16_t>(std::stoi(args[0], nullptr, 8)));
+        },
+        "");
+    reg.register_cmd(
+        "disk",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>&,
            std::string& out) -> int {
-            DiskUsage du=fs.fs_disk_usage();
+            DiskUsage du = fs.fs_disk_usage();
             char b[128];
-            std::snprintf(b,sizeof(b),"used=%u/%u",du.used_blocks,du.total_blocks);
-            out=b;return 0;
-        }, "");
-    reg.register_cmd("tree",
+            std::snprintf(b, sizeof(b), "used=%u/%u", du.used_blocks, du.total_blocks);
+            out = b;
+            return 0;
+        },
+        "");
+    reg.register_cmd(
+        "tree",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string& out) -> int {
-            int maxd=6; const char* path="";
-            for(size_t i=0;i<args.size();++i){
-                if(args[i]=="-d"&&i+1<args.size()){maxd=std::stoi(args[++i]);if(maxd<1)maxd=1;}
-                else path=args[i].c_str();
+            int maxd = 6;
+            const char* path = "";
+            for (size_t i = 0; i < args.size(); ++i) {
+                if (args[i] == "-d" && i + 1 < args.size()) {
+                    maxd = std::stoi(args[++i]);
+                    if (maxd < 1) maxd = 1;
+                } else
+                    path = args[i].c_str();
             }
             std::vector<DirEntry> top;
-            if(fs.fs_ls(path,top)!=0)return -1;
-            std::function<void(const std::vector<DirEntry>&,const std::string&,int,const std::string&)>
-                walk=[&](const std::vector<DirEntry>& es,const std::string& b,int d,const std::string& p){
-                if(d>maxd)return;
-                for(size_t j=0;j<es.size();++j){
-                    auto& e=es[j];
-                    if(std::strcmp(e.name,".")==0||std::strcmp(e.name,"..")==0)continue;
-                    bool last=(j==es.size()-1);
-                    out+=p+(last?"\\-- ":"|-- ")+e.name+(e.type==TYPE_DIR?"/":"")+"\n";
-                    if(e.type==TYPE_DIR&&d<maxd){
-                        std::string c=b+"/"+e.name;
-                        std::vector<DirEntry> kids;
-                        if(fs.fs_ls(c.c_str(),kids)==0)
-                            walk(kids,c,d+1,p+(last?"    ":"|   "));
+            if (fs.fs_ls(path, top) != 0) return -1;
+            std::function<void(const std::vector<DirEntry>&, const std::string&, int,
+                               const std::string&)>
+                walk = [&](const std::vector<DirEntry>& es, const std::string& b, int d,
+                           const std::string& p) {
+                    if (d > maxd) return;
+                    for (size_t j = 0; j < es.size(); ++j) {
+                        auto& e = es[j];
+                        if (std::strcmp(e.name, ".") == 0 || std::strcmp(e.name, "..") == 0)
+                            continue;
+                        bool last = (j == es.size() - 1);
+                        out += p + (last ? "\\-- " : "|-- ") + e.name +
+                               (e.type == TYPE_DIR ? "/" : "") + "\n";
+                        if (e.type == TYPE_DIR && d < maxd) {
+                            std::string c = b + "/" + e.name;
+                            std::vector<DirEntry> kids;
+                            if (fs.fs_ls(c.c_str(), kids) == 0)
+                                walk(kids, c, d + 1, p + (last ? "    " : "|   "));
+                        }
                     }
-                }
-            };
-            walk(top,".",1,""); if(out.empty())out="(empty)"; return 0;
-        }, "");
+                };
+            walk(top, ".", 1, "");
+            if (out.empty()) out = "(empty)";
+            return 0;
+        },
+        "");
 }
 
 // ============================================================
@@ -306,10 +422,12 @@ void register_all(CommandRegistry& reg) {
 // ============================================================
 
 class E2ETest : public ::testing::Test {
-protected:
+   protected:
     TestHarness h;
 
-    void SetUp() override { register_all(h.reg); }
+    void SetUp() override {
+        register_all(h.reg);
+    }
 };
 
 // ==================== UNIX FS ====================

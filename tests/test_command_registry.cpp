@@ -179,8 +179,9 @@ TEST(CommandRegistryTest, ExecuteCatchesGenericException) {
     CommandRegistry reg;
     reg.register_cmd(
         "boom",
-        [](IFileSystem&, UserManager&, const std::vector<std::string>&,
-           std::string&) -> int { throw std::runtime_error("kaboom"); },
+        [](IFileSystem&, UserManager&, const std::vector<std::string>&, std::string&) -> int {
+            throw std::runtime_error("kaboom");
+        },
         "boom");
 
     StubFs fs;
@@ -306,8 +307,9 @@ TEST(GlobTest, DirPrefixPreserved) {
 // --- Operation log / replay (C-05) ---
 
 static CmdHandler noop() {
-    return [](IFileSystem&, UserManager&, const std::vector<std::string>&,
-              std::string&) -> int { return 0; };
+    return [](IFileSystem&, UserManager&, const std::vector<std::string>&, std::string&) -> int {
+        return 0;
+    };
 }
 
 TEST(OpLogTest, RecordsExecutedCommands) {
@@ -361,8 +363,7 @@ TEST(OpLogTest, ReplayReExecutesWithoutGrowingLog) {
     int calls = 0;
     reg.register_cmd(
         "ping",
-        [&calls](IFileSystem&, UserManager&, const std::vector<std::string>&,
-                 std::string&) -> int {
+        [&calls](IFileSystem&, UserManager&, const std::vector<std::string>&, std::string&) -> int {
             ++calls;
             return 0;
         },

@@ -418,15 +418,13 @@ TEST_F(Fat16Test, HighUidCanOpenAndReadWrite) {
     ASSERT_GE(fd, 0) << "uid>=MAX_USER could not open a FAT16 file";
 
     const char* msg = "uid 100 was here";
-    EXPECT_EQ(fs_->fs_write(fd, msg, std::strlen(msg)),
-              static_cast<ssize_t>(std::strlen(msg)));
+    EXPECT_EQ(fs_->fs_write(fd, msg, std::strlen(msg)), static_cast<ssize_t>(std::strlen(msg)));
     EXPECT_EQ(fs_->fs_close(fd), 0);
 
     fd = fs_->fs_open("/shared.txt", O_READ);
     ASSERT_GE(fd, 0);
     char buf[64] = {};
-    EXPECT_EQ(fs_->fs_read(fd, buf, sizeof(buf) - 1),
-              static_cast<ssize_t>(std::strlen(msg)));
+    EXPECT_EQ(fs_->fs_read(fd, buf, sizeof(buf) - 1), static_cast<ssize_t>(std::strlen(msg)));
     EXPECT_STREQ(buf, msg);
     fs_->fs_close(fd);
 }
@@ -439,10 +437,10 @@ TEST_F(Fat16Test, HighUidCanOpenAndReadWrite) {
 // matched the fake entry, and updated/read the wrong place — so the real
 // directory entry's size was never written. Observable as stat reporting 0.
 TEST_F(Fat16Test, FileSizeNotConfusedByDataAliasingDirEntry) {
-    fs_->fs_create("/a", DEFAULT_MODE);            // takes the lowest cluster
-    fs_->fs_mkdir("/sub");                         // takes the next cluster
-    fs_->fs_delete("/a");                          // frees the lowest cluster
-    fs_->fs_create("/sub/victim", DEFAULT_MODE);   // reuses it: data cluster < parent
+    fs_->fs_create("/a", DEFAULT_MODE);           // takes the lowest cluster
+    fs_->fs_mkdir("/sub");                        // takes the next cluster
+    fs_->fs_delete("/a");                         // frees the lowest cluster
+    fs_->fs_create("/sub/victim", DEFAULT_MODE);  // reuses it: data cluster < parent
 
     // victim's first cluster is exposed as inode_no in the FAT16 listing.
     std::vector<DirEntry> sub;
@@ -467,9 +465,8 @@ TEST_F(Fat16Test, FileSizeNotConfusedByDataAliasingDirEntry) {
 
     FileStat st{};
     ASSERT_EQ(fs_->fs_stat("/sub/victim", st), 0);
-    EXPECT_EQ(st.size, 32u)
-        << "size lost: the lookup matched the file's data cluster instead of "
-           "its real parent directory entry";
+    EXPECT_EQ(st.size, 32u) << "size lost: the lookup matched the file's data cluster instead of "
+                               "its real parent directory entry";
 }
 
 TEST_F(Fat16Test, DeleteThenCreateSameName) {

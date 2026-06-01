@@ -9,7 +9,7 @@ namespace pfs {
 namespace {
 
 class UserManagerTest : public ::testing::Test {
-protected:
+   protected:
     UserManager um;
 };
 

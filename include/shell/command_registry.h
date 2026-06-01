@@ -45,7 +45,9 @@ class CommandRegistry {
     void set_log_path(const std::string& path);
 
     // The recorded operations, oldest first.
-    const std::vector<LogEntry>& op_log() const { return log_; }
+    const std::vector<LogEntry>& op_log() const {
+        return log_;
+    }
 
     // Forget all entries (and truncate the log file if one is set).
     void clear_log();
@@ -75,8 +77,7 @@ class CommandRegistry {
     // resulting argument list. An unquoted token with metacharacters is
     // replaced by the sorted set of matching paths; if nothing matches it is
     // left literal (nullglob off, matching common shell behavior).
-    static std::vector<std::string> expand_globs(IFileSystem& fs,
-                                                  const std::vector<Token>& tokens);
+    static std::vector<std::string> expand_globs(IFileSystem& fs, const std::vector<Token>& tokens);
 
     // Append one operation to the log (in memory + file), unless logging is
     // suppressed (during replay) or the command is a meta-command.

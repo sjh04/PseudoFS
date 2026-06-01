@@ -35,16 +35,12 @@ static void draw_box_title(WINDOW* win, const char* title) {
 
 // Draw "Label ████▒▒▒▒ used/total (pct%)" using ACS block glyphs. The filled
 // portion is colored by fullness (green < 70%, yellow < 90%, red otherwise).
-static void draw_meter(WINDOW* win, int y, int x, const char* label, int width,
-                       uint32_t used, uint32_t total) {
+static void draw_meter(WINDOW* win, int y, int x, const char* label, int width, uint32_t used,
+                       uint32_t total) {
     if (width < 1) width = 1;
-    int filled = (total > 0)
-                     ? static_cast<int>(static_cast<uint64_t>(used) * width / total)
-                     : 0;
+    int filled = (total > 0) ? static_cast<int>(static_cast<uint64_t>(used) * width / total) : 0;
     if (filled > width) filled = width;
-    int pct = (total > 0)
-                  ? static_cast<int>(static_cast<uint64_t>(used) * 100 / total)
-                  : 0;
+    int pct = (total > 0) ? static_cast<int>(static_cast<uint64_t>(used) * 100 / total) : 0;
     int fill_pair = (pct >= 90) ? 5 : (pct >= 70 ? 3 : 1);  // red / yellow / green
 
     mvwprintw(win, y, x, "%-6s ", label);
@@ -62,10 +58,18 @@ static void draw_meter(WINDOW* win, int y, int x, const char* label, int width,
     wprintw(win, " %u/%u (%d%%)", used, total, pct);
 }
 
-static int tree_h(int max_y) { return max_y * 0.55; }
-static int term_h(int max_y) { return max_y - tree_h(max_y) - 2; }
-static int tree_w(int max_x) { return max_x * 0.4; }
-static int disk_w(int max_x) { return max_x - tree_w(max_x); }
+static int tree_h(int max_y) {
+    return max_y * 0.55;
+}
+static int term_h(int max_y) {
+    return max_y - tree_h(max_y) - 2;
+}
+static int tree_w(int max_x) {
+    return max_x * 0.4;
+}
+static int disk_w(int max_x) {
+    return max_x - tree_w(max_x);
+}
 
 // Strip ANSI CSI escape sequences (e.g. ls's "\033[32m") from a string. The
 // shell colors some output with ANSI codes for CLI mode; ncurses would print
@@ -103,8 +107,8 @@ static void print_output(WINDOW* win, const std::string& text) {
 
 // ------- Helper: recursive tree walk -------
 
-static void walk_tree(IFileSystem& fs, const std::string& path, int& line,
-                      int max_lines, WINDOW* win, std::vector<bool>& ancestors) {
+static void walk_tree(IFileSystem& fs, const std::string& path, int& line, int max_lines,
+                      WINDOW* win, std::vector<bool>& ancestors) {
     if (ancestors.size() > 6 || line >= max_lines) return;
 
     std::vector<DirEntry> entries;
@@ -118,11 +122,10 @@ static void walk_tree(IFileSystem& fs, const std::string& path, int& line,
         kids.push_back(e);
     }
     // Sort: dirs first, then alphabetically.
-    std::sort(kids.begin(), kids.end(),
-              [](const DirEntry& a, const DirEntry& b) {
-                  if (a.type != b.type) return a.type > b.type;
-                  return std::string(a.name) < std::string(b.name);
-              });
+    std::sort(kids.begin(), kids.end(), [](const DirEntry& a, const DirEntry& b) {
+        if (a.type != b.type) return a.type > b.type;
+        return std::string(a.name) < std::string(b.name);
+    });
 
     for (size_t i = 0; i < kids.size(); ++i) {
         if (line >= max_lines) return;
@@ -158,8 +161,8 @@ static void walk_tree(IFileSystem& fs, const std::string& path, int& line,
         ++line;
 
         if (e.type == TYPE_DIR && ancestors.size() < 5) {
-            std::string child = (path == "/") ? "/" + std::string(e.name)
-                                              : path + "/" + std::string(e.name);
+            std::string child =
+                (path == "/") ? "/" + std::string(e.name) : path + "/" + std::string(e.name);
             ancestors.push_back(!last);
             walk_tree(fs, child, line, max_lines, win, ancestors);
             ancestors.pop_back();
@@ -169,12 +172,13 @@ static void walk_tree(IFileSystem& fs, const std::string& path, int& line,
 
 // ------- Constructor / Destructor -------
 
-Tui::Tui(IFileSystem& fs, IFileSystem& alt_fs, UserManager& um,
-         CommandRegistry& reg)
-    : fs_(&fs), alt_fs_(&alt_fs), um_(&um), reg_(&reg),
-      running_(false), win_(nullptr) {}
+Tui::Tui(IFileSystem& fs, IFileSystem& alt_fs, UserManager& um, CommandRegistry& reg)
+    : fs_(&fs), alt_fs_(&alt_fs), um_(&um), reg_(&reg), running_(false), win_(nullptr) {
+}
 
-Tui::~Tui() { delete win_; }
+Tui::~Tui() {
+    delete win_;
+}
 
 // ------- UI draw helpers -------
 
@@ -192,8 +196,7 @@ void Tui::draw_title(Windows& w) {
     wattron(w.title_bar, A_BOLD);
     mvwprintw(w.title_bar, 0, 1, " PFS v2.0 ");
     wattroff(w.title_bar, A_BOLD);
-    wprintw(w.title_bar, "| %s | user: %s | %s ", fs_type.c_str(), user.c_str(),
-            clock);
+    wprintw(w.title_bar, "| %s | user: %s | %s ", fs_type.c_str(), user.c_str(), clock);
     // Right-aligned hint keys.
     const char* keys = "F1 Help  F2 Switch  F3 Map  F10 Exit ";
     int kx = w.max_x - static_cast<int>(std::strlen(keys)) - 1;
@@ -238,11 +241,9 @@ void Tui::draw_disk(Windows& w, int start_line) {
     int bar_w = disk_w(w.max_x) - 22;
     if (bar_w < 8) bar_w = 8;
 
-    draw_meter(w.disk_win, line++, 2, "Block", bar_w, du.used_blocks,
-               du.total_blocks);
+    draw_meter(w.disk_win, line++, 2, "Block", bar_w, du.used_blocks, du.total_blocks);
     if (du.total_inodes > 0) {
-        draw_meter(w.disk_win, line++, 2, "INode", bar_w, du.used_inodes,
-                   du.total_inodes);
+        draw_meter(w.disk_win, line++, 2, "INode", bar_w, du.used_inodes, du.total_inodes);
     }
 
     line++;
@@ -259,8 +260,8 @@ void Tui::draw_status(Windows& w) {
     struct {
         const char* key;
         const char* desc;
-    } items[] = {{"F1", "Help"},   {"F2", "Switch"}, {"F3", "DiskMap"},
-                 {"F5", "Refresh"}, {"F10", "Exit"}};
+    } items[] = {
+        {"F1", "Help"}, {"F2", "Switch"}, {"F3", "DiskMap"}, {"F5", "Refresh"}, {"F10", "Exit"}};
     wmove(w.status_bar, 0, 1);
     for (const auto& it : items) {
         wattron(w.status_bar, A_BOLD);
@@ -368,29 +369,29 @@ void Tui::page_content(Windows& w, const std::string& content) {
         wrefresh(pw);
 
         switch (wgetch(pw)) {
-        case ' ':
-        case KEY_NPAGE:
-            top = std::min(top + page_h, max_top);
-            break;
-        case KEY_DOWN:
-        case '\n':
-        case KEY_ENTER:
-            top = std::min(top + 1, max_top);
-            break;
-        case 'b':
-        case 'B':
-        case KEY_PPAGE:
-            top = std::max(top - page_h, 0);
-            break;
-        case KEY_UP:
-            top = std::max(top - 1, 0);
-            break;
-        case 'q':
-        case 'Q':
-            quit = true;
-            break;
-        default:
-            break;
+            case ' ':
+            case KEY_NPAGE:
+                top = std::min(top + page_h, max_top);
+                break;
+            case KEY_DOWN:
+            case '\n':
+            case KEY_ENTER:
+                top = std::min(top + 1, max_top);
+                break;
+            case 'b':
+            case 'B':
+            case KEY_PPAGE:
+                top = std::max(top - page_h, 0);
+                break;
+            case KEY_UP:
+                top = std::max(top - 1, 0);
+                break;
+            case 'q':
+            case 'Q':
+                quit = true;
+                break;
+            default:
+                break;
         }
     }
     delwin(pw);
@@ -476,302 +477,296 @@ void Tui::run() {
         }
 
         switch (ch) {
-        case '\n':
-        case KEY_ENTER: {
-            if (input_buf.empty()) break;
-            cmd_history.push_back(input_buf);
-            history_idx = -1;
+            case '\n':
+            case KEY_ENTER: {
+                if (input_buf.empty()) break;
+                cmd_history.push_back(input_buf);
+                history_idx = -1;
 
-            // The command text was already echoed live as it was typed, so
-            // just advance to the next line (reprinting it would double it).
-            wprintw(w.term_win, "\n");
+                // The command text was already echoed live as it was typed, so
+                // just advance to the next line (reprinting it would double it).
+                wprintw(w.term_win, "\n");
 
-            std::string output;
-            int ret = reg_->execute(input_buf, *fs_, *um_, output);
+                std::string output;
+                int ret = reg_->execute(input_buf, *fs_, *um_, output);
 
-            if (output == "__EXIT__") {
-                running_ = false;
+                if (output == "__EXIT__") {
+                    running_ = false;
+                    break;
+                }
+
+                // `more` returns its content behind PAGER_PREFIX — show it in the
+                // full-screen pager, then restore the main screen.
+                const std::string pager(PAGER_PREFIX);
+                if (output.rfind(pager, 0) == 0) {
+                    page_content(w, strip_ansi(output.substr(pager.size())));
+                    input_buf.clear();
+                    redraw_all(w, input_buf);
+                    refresh();
+                    break;
+                }
+
+                std::string shown = strip_ansi(output);
+                while (!shown.empty() && shown.back() == '\n') shown.pop_back();
+                if (!shown.empty()) {
+                    if (ret != 0) wattron(w.term_win, COLOR_PAIR(5));
+                    print_output(w.term_win, shown);
+                    if (ret != 0) wattroff(w.term_win, COLOR_PAIR(5));
+                }
+
+                // Refresh the side panels so the tree / disk / title reflect what
+                // the command just did (mkdir, cd, rm, ...). Sync the engine to the
+                // current user first so the tree shows the logged-in user's view
+                // immediately after login/su.
+                fs_->set_user(um_->current_uid(), um_->current_gid());
+                draw_title(w);
+                draw_tree(w, 1, tree_h(w.max_y) - 1);
+                draw_disk(w, 1);
+
+                input_buf.clear();
+                draw_prompt(w);
+                wrefresh(w.term_win);
                 break;
             }
-
-            // `more` returns its content behind PAGER_PREFIX — show it in the
-            // full-screen pager, then restore the main screen.
-            const std::string pager(PAGER_PREFIX);
-            if (output.rfind(pager, 0) == 0) {
-                page_content(w, strip_ansi(output.substr(pager.size())));
-                input_buf.clear();
+            case KEY_BACKSPACE:
+            case 127:
+            case '\b':
+                if (!input_buf.empty()) {
+                    input_buf.pop_back();
+                    redraw_input();
+                }
+                break;
+            case KEY_UP:
+                if (!cmd_history.empty()) {
+                    if (history_idx == -1) {
+                        saved_input = input_buf;
+                        history_idx = static_cast<int>(cmd_history.size()) - 1;
+                    } else if (history_idx > 0) {
+                        --history_idx;
+                    }
+                    input_buf = cmd_history[history_idx];
+                    redraw_input();
+                }
+                break;
+            case KEY_DOWN:
+                if (history_idx != -1) {
+                    if (history_idx < static_cast<int>(cmd_history.size()) - 1) {
+                        ++history_idx;
+                        input_buf = cmd_history[history_idx];
+                    } else {
+                        history_idx = -1;
+                        input_buf = saved_input;
+                    }
+                    redraw_input();
+                }
+                break;
+            case KEY_F(1): {
+                int popup_h = 18, popup_w = 55;
+                int py = (w.max_y - popup_h) / 2;
+                int px = (w.max_x - popup_w) / 2;
+                WINDOW* hw = newwin(popup_h, popup_w, py, px);
+                // Enable keypad so a function key (e.g. F1 to close) is read as one
+                // KEY_F(1) token. Without it, F1's "\033OP" escape sequence leaks:
+                // wgetch returns the bare ESC and the leftover "OP" bytes fall
+                // through to the main loop and get typed into the command line.
+                keypad(hw, TRUE);
+                draw_box_title(hw, " Help ");
+                auto cmds = reg_->list_commands();
+                int l = 1;
+                for (auto& c : cmds) {
+                    if (l >= popup_h - 1) break;
+                    mvwprintw(hw, l++, 2, "%-12s %s", c.first.c_str(), c.second.c_str());
+                }
+                mvwprintw(hw, popup_h - 2, 2, "Press any key to close");
+                wrefresh(hw);
+                wgetch(hw);
+                delwin(hw);
                 redraw_all(w, input_buf);
                 refresh();
                 break;
             }
-
-            std::string shown = strip_ansi(output);
-            while (!shown.empty() && shown.back() == '\n') shown.pop_back();
-            if (!shown.empty()) {
-                if (ret != 0) wattron(w.term_win, COLOR_PAIR(5));
-                print_output(w.term_win, shown);
-                if (ret != 0) wattroff(w.term_win, COLOR_PAIR(5));
-            }
-
-            // Refresh the side panels so the tree / disk / title reflect what
-            // the command just did (mkdir, cd, rm, ...). Sync the engine to the
-            // current user first so the tree shows the logged-in user's view
-            // immediately after login/su.
-            fs_->set_user(um_->current_uid(), um_->current_gid());
-            draw_title(w);
-            draw_tree(w, 1, tree_h(w.max_y) - 1);
-            draw_disk(w, 1);
-
-            input_buf.clear();
-            draw_prompt(w);
-            wrefresh(w.term_win);
-            break;
-        }
-        case KEY_BACKSPACE:
-        case 127:
-        case '\b':
-            if (!input_buf.empty()) {
-                input_buf.pop_back();
-                redraw_input();
-            }
-            break;
-        case KEY_UP:
-            if (!cmd_history.empty()) {
-                if (history_idx == -1) {
-                    saved_input = input_buf;
-                    history_idx = static_cast<int>(cmd_history.size()) - 1;
-                } else if (history_idx > 0) {
-                    --history_idx;
-                }
-                input_buf = cmd_history[history_idx];
-                redraw_input();
-            }
-            break;
-        case KEY_DOWN:
-            if (history_idx != -1) {
-                if (history_idx <
-                    static_cast<int>(cmd_history.size()) - 1) {
-                    ++history_idx;
-                    input_buf = cmd_history[history_idx];
-                } else {
-                    history_idx = -1;
-                    input_buf = saved_input;
-                }
-                redraw_input();
-            }
-            break;
-        case KEY_F(1): {
-            int popup_h = 18, popup_w = 55;
-            int py = (w.max_y - popup_h) / 2;
-            int px = (w.max_x - popup_w) / 2;
-            WINDOW* hw = newwin(popup_h, popup_w, py, px);
-            // Enable keypad so a function key (e.g. F1 to close) is read as one
-            // KEY_F(1) token. Without it, F1's "\033OP" escape sequence leaks:
-            // wgetch returns the bare ESC and the leftover "OP" bytes fall
-            // through to the main loop and get typed into the command line.
-            keypad(hw, TRUE);
-            draw_box_title(hw, " Help ");
-            auto cmds = reg_->list_commands();
-            int l = 1;
-            for (auto& c : cmds) {
-                if (l >= popup_h - 1) break;
-                mvwprintw(hw, l++, 2, "%-12s %s", c.first.c_str(),
-                          c.second.c_str());
-            }
-            mvwprintw(hw, popup_h - 2, 2, "Press any key to close");
-            wrefresh(hw);
-            wgetch(hw);
-            delwin(hw);
-            redraw_all(w, input_buf);
-            refresh();
-            break;
-        }
-        case KEY_F(2):
-            switch_fs();
-            wprintw(w.term_win, "\n[Switched to %s]\n",
-                    fs_->fs_type_name().c_str());
-            draw_prompt(w);
-            wprintw(w.term_win, "%s", input_buf.c_str());
-            wrefresh(w.term_win);
-            redraw_all(w, input_buf);
-            refresh();
-            break;
-        case KEY_F(3): {  // Full-screen disk block map
-            fs_->set_user(um_->current_uid(), um_->current_gid());
-            std::vector<uint8_t> bmap;
-            fs_->fs_block_map(bmap);
-
-            int used = 0, freeb = 0, meta = 0;
-            for (uint8_t s : bmap) {
-                if (s == BLK_USED) ++used;
-                else if (s == BLK_META) ++meta;
-                else ++freeb;
-            }
-
-            WINDOW* dw = newwin(w.max_y, w.max_x, 0, 0);
-            keypad(dw, TRUE);
-            werase(dw);
-            box(dw, 0, 0);
-            mvwprintw(dw, 0, 2, " Disk Block Map - %s - %d blocks ",
-                      fs_->fs_type_name().c_str(), static_cast<int>(bmap.size()));
-
-            int cols = w.max_x - 4;
-            if (cols < 16) cols = 16;
-            const int top = 2;
-            int max_rows = w.max_y - 5;  // leave room for legend + footer
-            int drawn = 0;
-            for (size_t i = 0; i < bmap.size(); ++i) {
-                int row = top + static_cast<int>(i) / cols;
-                if (row - top >= max_rows) break;
-                int col = 2 + static_cast<int>(i) % cols;
-                int pair;
-                chtype glyph;
-                if (bmap[i] == BLK_USED) {
-                    pair = 5;  // red solid
-                    glyph = ACS_BLOCK;
-                } else if (bmap[i] == BLK_META) {
-                    pair = 4;  // cyan solid
-                    glyph = ACS_BLOCK;
-                } else {
-                    pair = 1;  // green stipple
-                    glyph = ACS_CKBOARD;
-                }
-                wattron(dw, COLOR_PAIR(pair));
-                mvwaddch(dw, row, col, glyph);
-                wattroff(dw, COLOR_PAIR(pair));
-                ++drawn;
-            }
-
-            int ly = w.max_y - 2;
-            mvwprintw(dw, ly - 1, 2, "Legend:  ");
-            wattron(dw, COLOR_PAIR(5));
-            waddch(dw, ACS_BLOCK);
-            wattroff(dw, COLOR_PAIR(5));
-            wprintw(dw, " used    ");
-            wattron(dw, COLOR_PAIR(1));
-            waddch(dw, ACS_CKBOARD);
-            wattroff(dw, COLOR_PAIR(1));
-            wprintw(dw, " free    ");
-            wattron(dw, COLOR_PAIR(4));
-            waddch(dw, ACS_BLOCK);
-            wattroff(dw, COLOR_PAIR(4));
-            wprintw(dw, " meta");
-            mvwprintw(dw, ly, 2,
-                      "used=%d  free=%d  meta=%d%s   Press any key to close",
-                      used, freeb, meta,
-                      drawn < static_cast<int>(bmap.size()) ? "  (truncated)"
-                                                            : "");
-            wrefresh(dw);
-            wgetch(dw);
-            delwin(dw);
-            redraw_all(w, input_buf);
-            refresh();
-            break;
-        }
-        case KEY_F(5):
-            redraw_all(w, input_buf);
-            refresh();
-            break;
-        case KEY_F(10):
-            running_ = false;
-            break;
-        case KEY_RESIZE: {
-            delwin(w.title_bar);
-            delwin(w.tree_win);
-            delwin(w.disk_win);
-            delwin(w.term_win);  // inner derwin before its parent
-            delwin(w.term_box);
-            delwin(w.status_bar);
-            endwin();
-            refresh();
-            getmaxyx(stdscr, w.max_y, w.max_x);
-            w.title_bar = newwin(1, w.max_x, 0, 0);
-            w.tree_win =
-                newwin(tree_h(w.max_y), tree_w(w.max_x), 1, 0);
-            w.disk_win = newwin(tree_h(w.max_y), disk_w(w.max_x), 1,
-                                tree_w(w.max_x));
-            w.term_box =
-                newwin(term_h(w.max_y), w.max_x, 1 + tree_h(w.max_y), 0);
-            draw_box_title(w.term_box, " Terminal ");
-            wrefresh(w.term_box);
-            w.term_win = derwin(w.term_box, term_h(w.max_y) - 2,
-                                w.max_x - 2, 1, 1);
-            w.status_bar = newwin(1, w.max_x, w.max_y - 1, 0);
-            keypad(w.term_win, TRUE);
-            scrollok(w.term_win, TRUE);
-            wtimeout(w.term_win, 1000);
-            redraw_all(w, input_buf);
-            refresh();
-            break;
-        }
-        case '\t': {  // Tab — complete the command name (first word) or a filename
-            size_t last_space = input_buf.rfind(' ');
-            std::string prefix = (last_space == std::string::npos)
-                                     ? input_buf
-                                     : input_buf.substr(last_space + 1);
-            if (prefix.empty()) break;
-
-            std::vector<std::string> matches;
-            if (last_space == std::string::npos) {
-                // First word → complete against registered command names.
-                for (auto& c : reg_->list_commands()) {
-                    if (c.first.size() >= prefix.size() &&
-                        c.first.compare(0, prefix.size(), prefix) == 0) {
-                        matches.push_back(c.first);
-                    }
-                }
-            } else {
-                // Argument → complete against entries in the current directory.
-                std::vector<DirEntry> entries;
-                if (fs_->fs_ls("", entries) == 0) {
-                    for (auto& e : entries) {
-                        std::string name(e.name);
-                        if (name.size() >= prefix.size() &&
-                            name.compare(0, prefix.size(), prefix) == 0) {
-                            matches.push_back(name);
-                        }
-                    }
-                }
-            }
-            if (matches.empty()) break;
-
-            // Extend input to the longest common prefix of all matches: a unique
-            // candidate finishes the word; an ambiguous one fills in as far as it
-            // unambiguously can.
-            std::string common = matches[0];
-            for (size_t i = 1; i < matches.size(); ++i) {
-                size_t k = 0;
-                while (k < common.size() && k < matches[i].size() &&
-                       common[k] == matches[i][k]) {
-                    ++k;
-                }
-                common.resize(k);
-            }
-            if (common.size() > prefix.size()) {
-                std::string suffix = common.substr(prefix.size());
-                input_buf += suffix;
-                wprintw(w.term_win, "%s", suffix.c_str());
-                wrefresh(w.term_win);
-            }
-
-            // Still ambiguous → list all candidates, then redraw prompt+input.
-            if (matches.size() > 1) {
-                wprintw(w.term_win, "\n");
-                for (auto& m : matches) wprintw(w.term_win, "  %s", m.c_str());
-                wprintw(w.term_win, "\n");
+            case KEY_F(2):
+                switch_fs();
+                wprintw(w.term_win, "\n[Switched to %s]\n", fs_->fs_type_name().c_str());
                 draw_prompt(w);
                 wprintw(w.term_win, "%s", input_buf.c_str());
                 wrefresh(w.term_win);
+                redraw_all(w, input_buf);
+                refresh();
+                break;
+            case KEY_F(3): {  // Full-screen disk block map
+                fs_->set_user(um_->current_uid(), um_->current_gid());
+                std::vector<uint8_t> bmap;
+                fs_->fs_block_map(bmap);
+
+                int used = 0, freeb = 0, meta = 0;
+                for (uint8_t s : bmap) {
+                    if (s == BLK_USED)
+                        ++used;
+                    else if (s == BLK_META)
+                        ++meta;
+                    else
+                        ++freeb;
+                }
+
+                WINDOW* dw = newwin(w.max_y, w.max_x, 0, 0);
+                keypad(dw, TRUE);
+                werase(dw);
+                box(dw, 0, 0);
+                mvwprintw(dw, 0, 2, " Disk Block Map - %s - %d blocks ",
+                          fs_->fs_type_name().c_str(), static_cast<int>(bmap.size()));
+
+                int cols = w.max_x - 4;
+                if (cols < 16) cols = 16;
+                const int top = 2;
+                int max_rows = w.max_y - 5;  // leave room for legend + footer
+                int drawn = 0;
+                for (size_t i = 0; i < bmap.size(); ++i) {
+                    int row = top + static_cast<int>(i) / cols;
+                    if (row - top >= max_rows) break;
+                    int col = 2 + static_cast<int>(i) % cols;
+                    int pair;
+                    chtype glyph;
+                    if (bmap[i] == BLK_USED) {
+                        pair = 5;  // red solid
+                        glyph = ACS_BLOCK;
+                    } else if (bmap[i] == BLK_META) {
+                        pair = 4;  // cyan solid
+                        glyph = ACS_BLOCK;
+                    } else {
+                        pair = 1;  // green stipple
+                        glyph = ACS_CKBOARD;
+                    }
+                    wattron(dw, COLOR_PAIR(pair));
+                    mvwaddch(dw, row, col, glyph);
+                    wattroff(dw, COLOR_PAIR(pair));
+                    ++drawn;
+                }
+
+                int ly = w.max_y - 2;
+                mvwprintw(dw, ly - 1, 2, "Legend:  ");
+                wattron(dw, COLOR_PAIR(5));
+                waddch(dw, ACS_BLOCK);
+                wattroff(dw, COLOR_PAIR(5));
+                wprintw(dw, " used    ");
+                wattron(dw, COLOR_PAIR(1));
+                waddch(dw, ACS_CKBOARD);
+                wattroff(dw, COLOR_PAIR(1));
+                wprintw(dw, " free    ");
+                wattron(dw, COLOR_PAIR(4));
+                waddch(dw, ACS_BLOCK);
+                wattroff(dw, COLOR_PAIR(4));
+                wprintw(dw, " meta");
+                mvwprintw(dw, ly, 2, "used=%d  free=%d  meta=%d%s   Press any key to close", used,
+                          freeb, meta,
+                          drawn < static_cast<int>(bmap.size()) ? "  (truncated)" : "");
+                wrefresh(dw);
+                wgetch(dw);
+                delwin(dw);
+                redraw_all(w, input_buf);
+                refresh();
+                break;
             }
-            break;
-        }
-        default:
-            if (ch >= 32 && ch < 127) {
-                input_buf.push_back(static_cast<char>(ch));
-                waddch(w.term_win, static_cast<char>(ch));
-                wrefresh(w.term_win);
+            case KEY_F(5):
+                redraw_all(w, input_buf);
+                refresh();
+                break;
+            case KEY_F(10):
+                running_ = false;
+                break;
+            case KEY_RESIZE: {
+                delwin(w.title_bar);
+                delwin(w.tree_win);
+                delwin(w.disk_win);
+                delwin(w.term_win);  // inner derwin before its parent
+                delwin(w.term_box);
+                delwin(w.status_bar);
+                endwin();
+                refresh();
+                getmaxyx(stdscr, w.max_y, w.max_x);
+                w.title_bar = newwin(1, w.max_x, 0, 0);
+                w.tree_win = newwin(tree_h(w.max_y), tree_w(w.max_x), 1, 0);
+                w.disk_win = newwin(tree_h(w.max_y), disk_w(w.max_x), 1, tree_w(w.max_x));
+                w.term_box = newwin(term_h(w.max_y), w.max_x, 1 + tree_h(w.max_y), 0);
+                draw_box_title(w.term_box, " Terminal ");
+                wrefresh(w.term_box);
+                w.term_win = derwin(w.term_box, term_h(w.max_y) - 2, w.max_x - 2, 1, 1);
+                w.status_bar = newwin(1, w.max_x, w.max_y - 1, 0);
+                keypad(w.term_win, TRUE);
+                scrollok(w.term_win, TRUE);
+                wtimeout(w.term_win, 1000);
+                redraw_all(w, input_buf);
+                refresh();
+                break;
             }
-            break;
+            case '\t': {  // Tab — complete the command name (first word) or a filename
+                size_t last_space = input_buf.rfind(' ');
+                std::string prefix = (last_space == std::string::npos)
+                                         ? input_buf
+                                         : input_buf.substr(last_space + 1);
+                if (prefix.empty()) break;
+
+                std::vector<std::string> matches;
+                if (last_space == std::string::npos) {
+                    // First word → complete against registered command names.
+                    for (auto& c : reg_->list_commands()) {
+                        if (c.first.size() >= prefix.size() &&
+                            c.first.compare(0, prefix.size(), prefix) == 0) {
+                            matches.push_back(c.first);
+                        }
+                    }
+                } else {
+                    // Argument → complete against entries in the current directory.
+                    std::vector<DirEntry> entries;
+                    if (fs_->fs_ls("", entries) == 0) {
+                        for (auto& e : entries) {
+                            std::string name(e.name);
+                            if (name.size() >= prefix.size() &&
+                                name.compare(0, prefix.size(), prefix) == 0) {
+                                matches.push_back(name);
+                            }
+                        }
+                    }
+                }
+                if (matches.empty()) break;
+
+                // Extend input to the longest common prefix of all matches: a unique
+                // candidate finishes the word; an ambiguous one fills in as far as it
+                // unambiguously can.
+                std::string common = matches[0];
+                for (size_t i = 1; i < matches.size(); ++i) {
+                    size_t k = 0;
+                    while (k < common.size() && k < matches[i].size() &&
+                           common[k] == matches[i][k]) {
+                        ++k;
+                    }
+                    common.resize(k);
+                }
+                if (common.size() > prefix.size()) {
+                    std::string suffix = common.substr(prefix.size());
+                    input_buf += suffix;
+                    wprintw(w.term_win, "%s", suffix.c_str());
+                    wrefresh(w.term_win);
+                }
+
+                // Still ambiguous → list all candidates, then redraw prompt+input.
+                if (matches.size() > 1) {
+                    wprintw(w.term_win, "\n");
+                    for (auto& m : matches) wprintw(w.term_win, "  %s", m.c_str());
+                    wprintw(w.term_win, "\n");
+                    draw_prompt(w);
+                    wprintw(w.term_win, "%s", input_buf.c_str());
+                    wrefresh(w.term_win);
+                }
+                break;
+            }
+            default:
+                if (ch >= 32 && ch < 127) {
+                    input_buf.push_back(static_cast<char>(ch));
+                    waddch(w.term_win, static_cast<char>(ch));
+                    wrefresh(w.term_win);
+                }
+                break;
         }
     }
 

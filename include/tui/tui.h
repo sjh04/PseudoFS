@@ -9,15 +9,14 @@ class UserManager;
 class CommandRegistry;
 
 class Tui {
-public:
-    Tui(IFileSystem& fs, IFileSystem& alt_fs, UserManager& um,
-        CommandRegistry& reg);
+   public:
+    Tui(IFileSystem& fs, IFileSystem& alt_fs, UserManager& um, CommandRegistry& reg);
     ~Tui();
 
     // Main loop: init ncurses, event loop, cleanup. Blocks until F10.
     void run();
 
-private:
+   private:
     IFileSystem* fs_;
     IFileSystem* alt_fs_;
     UserManager* um_;

@@ -44,8 +44,7 @@ int UserManager::logout() {
     return 0;
 }
 
-int UserManager::add_user(const char* username, const char* password,
-                          uint16_t uid, uint16_t gid) {
+int UserManager::add_user(const char* username, const char* password, uint16_t uid, uint16_t gid) {
     // Only root (uid 0) can add users
     if (current_index_ < 0 || users_[current_index_].uid != 0) {
         return -1;
@@ -70,8 +69,7 @@ int UserManager::add_user(const char* username, const char* password,
     return 0;
 }
 
-int UserManager::change_password(uint16_t user_id, const char* old_pw,
-                                 const char* new_pw) {
+int UserManager::change_password(uint16_t user_id, const char* old_pw, const char* new_pw) {
     if (!is_logged_in()) return -1;
 
     const UserRecord* user = find_user(user_id);
@@ -99,9 +97,8 @@ int UserManager::change_password(uint16_t user_id, const char* old_pw,
     return -1;
 }
 
-bool UserManager::check_access(uint16_t user_id, uint16_t file_uid,
-                               uint16_t file_gid, uint16_t file_mode,
-                               uint8_t access) const {
+bool UserManager::check_access(uint16_t user_id, uint16_t file_uid, uint16_t file_gid,
+                               uint16_t file_mode, uint8_t access) const {
     // Root bypasses all permission checks
     if (user_id == 0) return true;
 
@@ -165,8 +162,7 @@ int UserManager::su(uint16_t uid, const char* password) {
 
     // Root can su without password
     if (!is_root) {
-        if (password == nullptr ||
-            std::strncmp(target->password, password, PWDSIZ) != 0) {
+        if (password == nullptr || std::strncmp(target->password, password, PWDSIZ) != 0) {
             return -1;
         }
     }
@@ -202,8 +198,7 @@ int UserManager::load_from_file(const char* path) {
     uint32_t magic = 0;
     uint32_t count = 0;
     if (std::fread(&magic, sizeof(magic), 1, fp) != 1 || magic != USER_MAGIC ||
-        std::fread(&count, sizeof(count), 1, fp) != 1 || count == 0 ||
-        count > MAX_USER) {
+        std::fread(&count, sizeof(count), 1, fp) != 1 || count == 0 || count > MAX_USER) {
         std::fclose(fp);
         return -1;
     }

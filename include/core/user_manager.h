@@ -21,7 +21,7 @@ struct UserRecord {
 };
 
 class UserManager {
-public:
+   public:
     UserManager();
 
     // Returns user_id on success, -1 on failure. Sets current user.
@@ -31,17 +31,14 @@ public:
     int logout();
 
     // Create a new user (root only). Returns 0 on success, -1 otherwise.
-    int add_user(const char* username, const char* password,
-                 uint16_t uid, uint16_t gid);
+    int add_user(const char* username, const char* password, uint16_t uid, uint16_t gid);
 
     // Change password for the given user (root may change any user's pw).
-    int change_password(uint16_t user_id, const char* old_pw,
-                        const char* new_pw);
+    int change_password(uint16_t user_id, const char* old_pw, const char* new_pw);
 
     // Check whether user_id has `access` permission (ACCESS_READ/WRITE/EXEC)
     // for a file with the given owner, group, and mode bits.
-    bool check_access(uint16_t user_id, uint16_t file_uid,
-                      uint16_t file_gid, uint16_t file_mode,
+    bool check_access(uint16_t user_id, uint16_t file_uid, uint16_t file_gid, uint16_t file_mode,
                       uint8_t access) const;
 
     // Current session
@@ -68,10 +65,10 @@ public:
     // flushes the table to `path`, mirroring the FS engines' auto-sync.
     void set_persist_path(const std::string& path);
 
-private:
+   private:
     UserRecord users_[MAX_USER];
     int user_count_;
-    int current_index_;  // -1 when no user logged in
+    int current_index_;         // -1 when no user logged in
     std::string persist_path_;  // empty = auto-save disabled
 };
 

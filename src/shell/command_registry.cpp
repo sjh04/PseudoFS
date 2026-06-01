@@ -30,10 +30,10 @@ bool glob_match(const char* p, const char* s) {
             ++p;
             ++s;
         } else if (*p == '*') {
-            star = p++;       // remember the '*' and the position to backtrack to
+            star = p++;  // remember the '*' and the position to backtrack to
             star_s = s;
         } else if (star != nullptr) {
-            p = star + 1;     // last '*' absorbs one more char of s
+            p = star + 1;  // last '*' absorbs one more char of s
             s = ++star_s;
         } else {
             return false;
@@ -213,9 +213,15 @@ std::vector<CommandRegistry::Token> CommandRegistry::tokenize_ex(const std::stri
                 if (cmdline[i] == '\\' && i + 1 < n) {
                     ++i;  // consume backslash, interpret the escape
                     switch (cmdline[i]) {
-                    case 'n': tok.text.push_back('\n'); break;
-                    case 't': tok.text.push_back('\t'); break;
-                    default: tok.text.push_back(cmdline[i]); break;  // \" \\ etc.
+                        case 'n':
+                            tok.text.push_back('\n');
+                            break;
+                        case 't':
+                            tok.text.push_back('\t');
+                            break;
+                        default:
+                            tok.text.push_back(cmdline[i]);
+                            break;  // \" \\ etc.
                     }
                     ++i;
                     continue;
@@ -259,10 +265,8 @@ std::vector<std::string> CommandRegistry::expand_globs(IFileSystem& fs,
         // prefix (if any) is taken literally. So "*.txt" globs in the cwd and
         // "docs/*.log" globs inside docs/, but "a*/b" is not expanded.
         size_t slash = tok.text.rfind('/');
-        std::string dir = (slash == std::string::npos) ? std::string()
-                                                        : tok.text.substr(0, slash);
-        std::string pat =
-            (slash == std::string::npos) ? tok.text : tok.text.substr(slash + 1);
+        std::string dir = (slash == std::string::npos) ? std::string() : tok.text.substr(0, slash);
+        std::string pat = (slash == std::string::npos) ? tok.text : tok.text.substr(slash + 1);
 
         std::vector<DirEntry> entries;
         std::vector<std::string> matches;
@@ -272,8 +276,7 @@ std::vector<std::string> CommandRegistry::expand_globs(IFileSystem& fs,
                     continue;
                 }
                 if (glob_match(pat.c_str(), e.name)) {
-                    matches.push_back(dir.empty() ? std::string(e.name)
-                                                  : dir + "/" + e.name);
+                    matches.push_back(dir.empty() ? std::string(e.name) : dir + "/" + e.name);
                 }
             }
         }

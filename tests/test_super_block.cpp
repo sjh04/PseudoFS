@@ -94,8 +94,7 @@ TEST_F(SuperBlockTest, FormatFreeListIntactAtGroupBoundary) {
     // multiples of NICFREE (50) and trip the boundary; 3 and 13 do not.
     for (int reserved : {3, 12, 13, 62}) {
         sb.format(static_cast<uint16_t>(reserved), 2);
-        const uint16_t expect_free =
-            static_cast<uint16_t>(DATA_BLK_NUM - reserved);
+        const uint16_t expect_free = static_cast<uint16_t>(DATA_BLK_NUM - reserved);
         ASSERT_EQ(sb.free_block_count(), expect_free) << "reserved=" << reserved;
 
         std::set<uint16_t> seen;

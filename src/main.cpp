@@ -10,10 +10,10 @@
 
 #include "core/block_device.h"
 #include "core/constants.h"
+#include "core/user_manager.h"
 #include "core/vfs.h"
 #include "fs/fat16/fat16_fs.h"
 #include "fs/unix/unix_fs.h"
-#include "core/user_manager.h"
 #include "shell/command_registry.h"
 #include "tui/tui.h"
 
@@ -38,8 +38,7 @@ static std::string open_error(IFileSystem& fs, const std::string& path) {
     if (st.type == TYPE_SYMLINK) {
         std::string target;
         FileStat tst{};
-        if (fs.fs_readlink(path.c_str(), target) == 0 &&
-            fs.fs_stat(target.c_str(), tst) != 0) {
+        if (fs.fs_readlink(path.c_str(), target) == 0 && fs.fs_stat(target.c_str(), tst) != 0) {
             return "broken symbolic link";
         }
     }
@@ -57,9 +56,8 @@ static std::string join_path(const std::string& base, const char* name) {
 // Append one `ll` detail line for an entry to `out`:
 //   <type+rwx>  <nlink>  <owner>  <size>  <mtime>  <display>[/ | @ -> target]
 // `full` is the path used for stat/readlink; `display` is the text shown.
-static void append_ll_line(IFileSystem& fs, UserManager& um,
-                           const std::string& full, const std::string& display,
-                           uint8_t type, std::string& out) {
+static void append_ll_line(IFileSystem& fs, UserManager& um, const std::string& full,
+                           const std::string& display, uint8_t type, std::string& out) {
     FileStat st{};
     fs.fs_stat(full.c_str(), st);
 
@@ -67,8 +65,7 @@ static void append_ll_line(IFileSystem& fs, UserManager& um,
     char perm[11];
     perm[0] = (type == TYPE_DIR) ? 'd' : (type == TYPE_SYMLINK) ? 'l' : '-';
     const char* rwx = "rwxrwxrwx";
-    for (int i = 0; i < 9; ++i)
-        perm[i + 1] = (st.mode & (1 << (8 - i))) ? rwx[i] : '-';
+    for (int i = 0; i < 9; ++i) perm[i + 1] = (st.mode & (1 << (8 - i))) ? rwx[i] : '-';
     perm[10] = '\0';
 
     // Owner: username if known, else the raw uid.
@@ -97,8 +94,8 @@ static void append_ll_line(IFileSystem& fs, UserManager& um,
     // Fixed-width prefix via snprintf; append name+suffix as a string so a long
     // symlink target is never truncated.
     char head[64];
-    std::snprintf(head, sizeof(head), "%s %2u %-8s %6u  %s  ", perm, st.nlink,
-                  owner, st.size, when);
+    std::snprintf(head, sizeof(head), "%s %2u %-8s %6u  %s  ", perm, st.nlink, owner, st.size,
+                  when);
     out += head;
     out += display;
     out += suffix;
@@ -119,8 +116,7 @@ static void register_commands(CommandRegistry& reg) {
                 out = "Login failed.";
                 return -1;
             }
-            out = "Welcome, " + um.current_username() +
-                  " (uid=" + std::to_string(uid) + ")";
+            out = "Welcome, " + um.current_username() + " (uid=" + std::to_string(uid) + ")";
             return 0;
         },
         "login <user> <pw> — log in");
@@ -175,8 +171,7 @@ static void register_commands(CommandRegistry& reg) {
                 out = "Usage: passwd <old-password> <new-password>";
                 return -1;
             }
-            int ret =
-                um.change_password(um.current_uid(), args[0].c_str(), args[1].c_str());
+            int ret = um.change_password(um.current_uid(), args[0].c_str(), args[1].c_str());
             if (ret != 0) {
                 out = "passwd: failed (check old password)";
                 return -1;
@@ -203,8 +198,10 @@ static void register_commands(CommandRegistry& reg) {
             bool mkdir_p = false;
             std::string path;
             for (auto& a : args) {
-                if (a == "-p") mkdir_p = true;
-                else path = a;
+                if (a == "-p")
+                    mkdir_p = true;
+                else
+                    path = a;
             }
             if (path.empty()) {
                 out = "Usage: mkdir [-p] <path>";
@@ -218,7 +215,10 @@ static void register_commands(CommandRegistry& reg) {
             // -p: create each level
             std::string cur;
             size_t pos = 0;
-            if (path[0] == '/') { cur = "/"; pos = 1; }
+            if (path[0] == '/') {
+                cur = "/";
+                pos = 1;
+            }
             while (pos < path.size()) {
                 size_t slash = path.find('/', pos);
                 if (slash == std::string::npos) slash = path.size();
@@ -253,9 +253,8 @@ static void register_commands(CommandRegistry& reg) {
             const UserRecord* u = um.find_user(args[0].c_str());
             if (u == nullptr) {
                 const std::string& who = args[0];
-                bool numeric = !who.empty() &&
-                               who.find_first_not_of("0123456789") ==
-                                   std::string::npos;
+                bool numeric =
+                    !who.empty() && who.find_first_not_of("0123456789") == std::string::npos;
                 if (numeric) {
                     u = um.find_user(static_cast<uint16_t>(std::stoi(who)));
                 }
@@ -314,24 +313,19 @@ static void register_commands(CommandRegistry& reg) {
             const std::string& pattern = args[1];
             out.clear();
             // Recursive search
-            std::function<void(const std::string&)> search =
-                [&](const std::string& dir) {
-                    std::vector<DirEntry> entries;
-                    if (fs.fs_ls(dir.c_str(), entries) != 0) return;
-                    for (auto& e : entries) {
-                        if (std::strcmp(e.name, ".") == 0 ||
-                            std::strcmp(e.name, "..") == 0)
-                            continue;
-                        std::string full =
-                            (dir == "/") ? "/" + std::string(e.name)
-                                         : dir + "/" + std::string(e.name);
-                        if (std::string(e.name).find(pattern) !=
-                            std::string::npos) {
-                            out += full + "\n";
-                        }
-                        if (e.type == TYPE_DIR) search(full);
+            std::function<void(const std::string&)> search = [&](const std::string& dir) {
+                std::vector<DirEntry> entries;
+                if (fs.fs_ls(dir.c_str(), entries) != 0) return;
+                for (auto& e : entries) {
+                    if (std::strcmp(e.name, ".") == 0 || std::strcmp(e.name, "..") == 0) continue;
+                    std::string full =
+                        (dir == "/") ? "/" + std::string(e.name) : dir + "/" + std::string(e.name);
+                    if (std::string(e.name).find(pattern) != std::string::npos) {
+                        out += full + "\n";
                     }
-                };
+                    if (e.type == TYPE_DIR) search(full);
+                }
+            };
             search(start);
             if (out.empty()) out = "(no matches)";
             return 0;
@@ -474,8 +468,7 @@ static void register_commands(CommandRegistry& reg) {
                     // Stat each entry by its full path (bare e.name would resolve
                     // against the cwd, wrong when listing another directory).
                     for (auto& e : entries)
-                        append_ll_line(fs, um, join_path(tp, e.name), e.name,
-                                       e.type, out);
+                        append_ll_line(fs, um, join_path(tp, e.name), e.name, e.type, out);
                 } else {
                     // A file/symlink argument (e.g. from "ll *.txt").
                     append_ll_line(fs, um, tp, tp, st.type, out);
@@ -521,8 +514,7 @@ static void register_commands(CommandRegistry& reg) {
             // report each failure but keep going.
             int rc = 0;
             for (auto& t : targets) {
-                int ret = recursive ? fs.fs_delete_recursive(t.c_str())
-                                    : fs.fs_delete(t.c_str());
+                int ret = recursive ? fs.fs_delete_recursive(t.c_str()) : fs.fs_delete(t.c_str());
                 if (ret != 0) {
                     out += "rm: cannot remove '" + t + "'\n";
                     rc = -1;
@@ -690,13 +682,12 @@ static void register_commands(CommandRegistry& reg) {
                 std::snprintf(buf, sizeof(buf),
                               "File: %s\nType: %s\nMode: %04o\nUID: %u  GID: %u\n"
                               "Size: %u bytes\nLinks: %u",
-                              p.c_str(), type_str, st.mode & 0x1FF, st.uid,
-                              st.gid, st.size, st.nlink);
+                              p.c_str(), type_str, st.mode & 0x1FF, st.uid, st.gid, st.size,
+                              st.nlink);
                 out += buf;
                 if (st.type == TYPE_SYMLINK) {
                     std::string tgt;
-                    if (fs.fs_readlink(p.c_str(), tgt) == 0)
-                        out += "\nTarget: " + tgt;
+                    if (fs.fs_readlink(p.c_str(), tgt) == 0) out += "\nTarget: " + tgt;
                 }
                 out += "\n";
             }
@@ -745,8 +736,9 @@ static void register_commands(CommandRegistry& reg) {
             int ret = symbolic ? fs.fs_symlink(pos[0].c_str(), pos[1].c_str())
                                : fs.fs_link(pos[0].c_str(), pos[1].c_str());
             if (ret != 0)
-                out = symbolic ? "ln: symlink failed (target name taken, or FS has no symlink support)"
-                               : "ln: failed";
+                out = symbolic
+                          ? "ln: symlink failed (target name taken, or FS has no symlink support)"
+                          : "ln: failed";
             return ret;
         },
         "ln [-s] <target> <link> — hard link, or -s for soft (symbolic) link");
@@ -835,10 +827,9 @@ static void register_commands(CommandRegistry& reg) {
                 return -1;
             }
             // Build tree recursively
-            std::function<void(const std::vector<DirEntry>&,
-                               const std::string&, int, const std::string&)>
-                walk = [&](const std::vector<DirEntry>& entries,
-                           const std::string& base, int depth,
+            std::function<void(const std::vector<DirEntry>&, const std::string&, int,
+                               const std::string&)>
+                walk = [&](const std::vector<DirEntry>& entries, const std::string& base, int depth,
                            const std::string& prefix) {
                     if (depth > max_depth) return;
                     for (size_t idx = 0; idx < entries.size(); ++idx) {
@@ -850,16 +841,12 @@ static void register_commands(CommandRegistry& reg) {
                         out += e.name;
                         if (e.type == TYPE_DIR) out += "/";
                         out += "\n";
-                        if (e.type == TYPE_DIR &&
-                            depth < max_depth) {
-                            std::string child =
-                                base + "/" + std::string(e.name);
+                        if (e.type == TYPE_DIR && depth < max_depth) {
+                            std::string child = base + "/" + std::string(e.name);
                             std::vector<DirEntry> kids;
                             if (fs.fs_ls(child.c_str(), kids) == 0) {
-                                std::string next_prefix =
-                                    prefix + (last ? "    " : "|   ");
-                                walk(kids, child, depth + 1,
-                                     next_prefix);
+                                std::string next_prefix = prefix + (last ? "    " : "|   ");
+                                walk(kids, child, depth + 1, next_prefix);
                             }
                         }
                     }
@@ -1005,8 +992,7 @@ static void cli_page(const std::string& content) {
     const int page = 20;
     const int total = static_cast<int>(lines.size());
     for (int top = 0; top < total; top += page) {
-        for (int i = top; i < top + page && i < total; ++i)
-            std::printf("%s\n", lines[i].c_str());
+        for (int i = top; i < top + page && i < total; ++i) std::printf("%s\n", lines[i].c_str());
         if (top + page >= total) break;
         std::printf("\033[7m--More-- (%d/%d) [Enter=more, q=quit]\033[0m",
                     std::min(top + page, total), total);
@@ -1040,8 +1026,8 @@ int main(int argc, char* argv[]) {
 
     UserManager um;
     if (!force_format) um.load_from_file(USERS_FILE);  // restore prior accounts
-    um.set_persist_path(USERS_FILE);  // auto-save on useradd/passwd
-    if (force_format) um.save_to_file(USERS_FILE);  // --format: reset to root
+    um.set_persist_path(USERS_FILE);                   // auto-save on useradd/passwd
+    if (force_format) um.save_to_file(USERS_FILE);     // --format: reset to root
 
     if (use_tui) {
         // --- TUI mode: each engine gets its OWN BlockDevice ---
@@ -1073,11 +1059,9 @@ int main(int argc, char* argv[]) {
         }
 
         IFileSystem* primary =
-            use_fat16 ? static_cast<IFileSystem*>(&fat16_fs)
-                      : static_cast<IFileSystem*>(&unix_fs);
+            use_fat16 ? static_cast<IFileSystem*>(&fat16_fs) : static_cast<IFileSystem*>(&unix_fs);
         IFileSystem* alt =
-            use_fat16 ? static_cast<IFileSystem*>(&unix_fs)
-                      : static_cast<IFileSystem*>(&fat16_fs);
+            use_fat16 ? static_cast<IFileSystem*>(&unix_fs) : static_cast<IFileSystem*>(&fat16_fs);
 
         Tui tui(*primary, *alt, um, reg);
         tui.run();
