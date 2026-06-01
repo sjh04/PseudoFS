@@ -214,6 +214,15 @@ TEST_F(Fat16Test, StatDir) {
     EXPECT_EQ(st.type, TYPE_DIR);
 }
 
+// Regression (Bug F3): stat on the root directory must succeed under FAT16
+// (it already does under the UNIX engine). resolve_path("/") yields an empty
+// final component, which matched no directory entry, so stat returned -1.
+TEST_F(Fat16Test, StatRoot) {
+    FileStat st{};
+    EXPECT_EQ(fs_->fs_stat("/", st), 0);
+    EXPECT_EQ(st.type, TYPE_DIR);
+}
+
 // --- Disk Usage ---
 
 TEST_F(Fat16Test, DiskUsageAfterFormat) {
@@ -392,6 +401,75 @@ TEST_F(Fat16Test, LsSubdirectory) {
     EXPECT_EQ(fs_->fs_ls("/lsdir", out), 0);
     // . + .. + a.txt + b.txt = 4
     EXPECT_EQ(out.size(), 4u);
+}
+
+// --- Regression: a user whose uid >= MAX_USER must still be able to open
+// files. FAT16 has no permission model, so the only thing a high uid should
+// affect is which open-file-table slot is used — never whether open succeeds.
+// (Bug F1: fs_open passed cur_uid_ straight into OpenFileTable as the per-user
+// slot index, which rejects user_id >= MAX_USER, so uid>=8 users could open
+// nothing in FAT16 while the same user worked fine under the UNIX engine.)
+TEST_F(Fat16Test, HighUidCanOpenAndReadWrite) {
+    fs_->fs_create("/shared.txt", DEFAULT_MODE);
+
+    fs_->set_user(100, 100);  // uid well past MAX_USER (8)
+
+    int fd = fs_->fs_open("/shared.txt", O_WRITE);
+    ASSERT_GE(fd, 0) << "uid>=MAX_USER could not open a FAT16 file";
+
+    const char* msg = "uid 100 was here";
+    EXPECT_EQ(fs_->fs_write(fd, msg, std::strlen(msg)),
+              static_cast<ssize_t>(std::strlen(msg)));
+    EXPECT_EQ(fs_->fs_close(fd), 0);
+
+    fd = fs_->fs_open("/shared.txt", O_READ);
+    ASSERT_GE(fd, 0);
+    char buf[64] = {};
+    EXPECT_EQ(fs_->fs_read(fd, buf, sizeof(buf) - 1),
+              static_cast<ssize_t>(std::strlen(msg)));
+    EXPECT_STREQ(buf, msg);
+    fs_->fs_close(fd);
+}
+
+// Regression (Bug F2): the file-size lookup must read the file's actual parent
+// directory, never "every allocated cluster interpreted as a directory". Here
+// we force the victim's data cluster to be numbered LOWER than its parent
+// directory's cluster, then write content that aliases a self-referential,
+// non-directory entry. The old brute-force scan reached the data cluster first,
+// matched the fake entry, and updated/read the wrong place — so the real
+// directory entry's size was never written. Observable as stat reporting 0.
+TEST_F(Fat16Test, FileSizeNotConfusedByDataAliasingDirEntry) {
+    fs_->fs_create("/a", DEFAULT_MODE);            // takes the lowest cluster
+    fs_->fs_mkdir("/sub");                         // takes the next cluster
+    fs_->fs_delete("/a");                          // frees the lowest cluster
+    fs_->fs_create("/sub/victim", DEFAULT_MODE);   // reuses it: data cluster < parent
+
+    // victim's first cluster is exposed as inode_no in the FAT16 listing.
+    std::vector<DirEntry> sub;
+    ASSERT_EQ(fs_->fs_ls("/sub", sub), 0);
+    uint16_t vc = 0;
+    for (auto& e : sub)
+        if (std::string(e.name) == "VICTIM") vc = e.inode_no;
+    ASSERT_GE(vc, 2);
+
+    // 32 bytes parsing as FAT16DirEntry{name="X", attr=ARCHIVE,
+    // first_cluster=vc, file_size=0}: a non-directory entry pointing at itself.
+    uint8_t craft[32] = {};
+    craft[0] = 'X';
+    craft[11] = FAT16_ATTR_ARCHIVE;  // no FAT16_ATTR_DIRECTORY bit
+    craft[26] = static_cast<uint8_t>(vc & 0xFF);
+    craft[27] = static_cast<uint8_t>(vc >> 8);
+
+    int fd = fs_->fs_open("/sub/victim", O_WRITE);
+    ASSERT_GE(fd, 0);
+    ASSERT_EQ(fs_->fs_write(fd, craft, sizeof(craft)), 32);
+    fs_->fs_close(fd);
+
+    FileStat st{};
+    ASSERT_EQ(fs_->fs_stat("/sub/victim", st), 0);
+    EXPECT_EQ(st.size, 32u)
+        << "size lost: the lookup matched the file's data cluster instead of "
+           "its real parent directory entry";
 }
 
 TEST_F(Fat16Test, DeleteThenCreateSameName) {

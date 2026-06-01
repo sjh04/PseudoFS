@@ -314,6 +314,30 @@ TEST_F(UnixFsTest, OtherAccessAllowed) {
     fs.fs_close(fd);
 }
 
+// Regression (Bug U3): opening with O_APPEND must require write permission.
+// check_access only inspected the O_READ and O_WRITE bits, so O_APPEND — which
+// fs_write honors as a writing mode — slipped through, letting a user with no
+// write permission append to a file.
+TEST_F(UnixFsTest, AppendModeRequiresWritePermission) {
+    fs.set_user(1000, 100);
+    fs.fs_create("log.txt", 0644);  // owner rw; group/other read-only
+    int fd = fs.fs_open("log.txt", O_WRITE);
+    ASSERT_GE(fd, 0);
+    fs.fs_write(fd, "owner", 5);
+    fs.fs_close(fd);
+
+    // A different user in a different group is in the "other" class: read-only.
+    fs.set_user(2000, 200);
+    EXPECT_EQ(fs.fs_open("log.txt", O_APPEND), -1)
+        << "O_APPEND bypassed the write-permission check";
+
+    // Sanity: the fix must not block the owner's legitimate append.
+    fs.set_user(1000, 100);
+    fd = fs.fs_open("log.txt", O_APPEND);
+    EXPECT_GE(fd, 0);
+    if (fd >= 0) fs.fs_close(fd);
+}
+
 // ---- Symbolic links ----
 
 TEST_F(UnixFsTest, SymlinkCreateAndReadlink) {

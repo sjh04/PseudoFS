@@ -38,16 +38,14 @@ void SuperBlock::format(uint16_t reserved_blocks, uint16_t reserved_inodes) {
     uint8_t blk_buf[BLOCK_SIZE];
 
     // Build disk groups: each consumes NICFREE blocks from the free list
-    // (1 storage + NICFREE-1 entries). Loop while we have enough blocks
-    // to fill a full group AND still have some left for the superblock.
+    // (1 storage block + (NICFREE-1) free-block entries). Keep building while at
+    // least a full group remains. Whatever is left (0..NICFREE-1 blocks) goes
+    // into the superblock's in-memory group below, which holds the link in
+    // s_free[0] plus up to NICFREE-1 free blocks — so s_nfree stays <= NICFREE.
+    // (Stopping one group early when total_free is a multiple of NICFREE would
+    // leave NICFREE blocks here, making s_nfree = NICFREE+1 and overflowing
+    // s_free[]. See test FormatFreeListIntactAtGroupBoundary.)
     while (total_free - (cursor - reserved_blocks) >= NICFREE) {
-        uint16_t remaining = total_free - (cursor - reserved_blocks);
-        if (remaining < NICFREE + 1) {
-            // Not enough for a full disk group plus at least 1 superblock entry.
-            // Leave the rest for the superblock.
-            break;
-        }
-
         uint16_t storage_block = cursor++;
 
         std::memset(blk_buf, 0, BLOCK_SIZE);

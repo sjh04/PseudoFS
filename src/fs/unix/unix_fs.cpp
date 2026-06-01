@@ -389,6 +389,13 @@ int UnixFs::fs_mkdir(const char* path) {
     dmng_.init_dir(new_ip, new_ip->i_ino, parent_ino);
     dmng_.link(parent_ip, basename.c_str(), new_ip->i_ino);
 
+    // NOTE: directory link counts are intentionally left at 1 instead of the
+    // classic "2 + subdirs" (a dir's own "." plus each child's ".."). This is
+    // cosmetic only — `ll` shows 1 for directories — and rmdir does not depend
+    // on it (it checks emptiness and force-zeroes nlink). Maintaining it would
+    // require ++ on both this inode and the parent here, with matching
+    // decrements in fs_rmdir.
+
     imng_.write_back(new_ip);
     imng_.write_back(parent_ip);
     imng_.put(new_ip);
@@ -837,7 +844,9 @@ bool UnixFs::check_access(MemINode* ip, uint8_t required) {
     }
 
     if ((required & O_READ) && !(mode & r_bit)) return false;
-    if ((required & O_WRITE) && !(mode & w_bit)) return false;
+    // O_APPEND is a writing mode (fs_write honors it), so it needs the write
+    // bit just like O_WRITE — otherwise append silently bypasses permissions.
+    if ((required & (O_WRITE | O_APPEND)) && !(mode & w_bit)) return false;
     return true;
 }
 
