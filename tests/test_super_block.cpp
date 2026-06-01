@@ -81,6 +81,39 @@ TEST_F(SuperBlockTest, BfreeOverflow) {
     EXPECT_EQ(sb.free_block_count(), free_before + blocks.size());
 }
 
+// Regression (Bug U1): the group-linked free-list builder must never leave the
+// in-memory group holding more than NICFREE entries. When the number of free
+// data blocks is an exact multiple of NICFREE, the old builder set
+// s_nfree = NICFREE + 1 and wrote one slot past s_free[], so the first balloc
+// handed out block 0 (a reserved/sentinel block) and the real last block was
+// leaked. We check the invariant through the public API by allocating every
+// free block and verifying the count, uniqueness, and that no reserved or
+// out-of-range block is ever returned.
+TEST_F(SuperBlockTest, FormatFreeListIntactAtGroupBoundary) {
+    // total_free = DATA_BLK_NUM - reserved. 512-12=500 and 512-62=450 are
+    // multiples of NICFREE (50) and trip the boundary; 3 and 13 do not.
+    for (int reserved : {3, 12, 13, 62}) {
+        sb.format(static_cast<uint16_t>(reserved), 2);
+        const uint16_t expect_free =
+            static_cast<uint16_t>(DATA_BLK_NUM - reserved);
+        ASSERT_EQ(sb.free_block_count(), expect_free) << "reserved=" << reserved;
+
+        std::set<uint16_t> seen;
+        for (uint16_t i = 0; i < expect_free; ++i) {
+            uint16_t blk = sb.balloc();
+            ASSERT_NE(blk, INVALID_BLK)
+                << "ran out early at alloc " << i << " (reserved=" << reserved << ")";
+            ASSERT_GE(blk, reserved)
+                << "handed out a reserved/sentinel block (reserved=" << reserved << ")";
+            ASSERT_LT(blk, DATA_BLK_NUM) << "reserved=" << reserved;
+            ASSERT_TRUE(seen.insert(blk).second)
+                << "duplicate block " << blk << " (reserved=" << reserved << ")";
+        }
+        EXPECT_EQ(sb.balloc(), INVALID_BLK) << "reserved=" << reserved;
+        EXPECT_EQ(sb.free_block_count(), 0u) << "reserved=" << reserved;
+    }
+}
+
 TEST_F(SuperBlockTest, IallocReturnsValidInodes) {
     uint16_t ino = sb.ialloc();
     EXPECT_NE(ino, INVALID_BLK);

@@ -103,12 +103,23 @@ class Fat16Fs : public IFileSystem {
 
     BlockDevice& dev_;
     OpenFileTable oft_;
+    // Parent directory cluster of each open fd, captured at open time so the
+    // file-size accessors can go straight to the real directory entry instead
+    // of brute-force scanning every cluster (which could alias file data as a
+    // directory). Indexed by user fd; valid only while the fd is open.
+    uint16_t open_parent_[MAX_OPEN_FILE] = {};
     FAT16BootSector boot_;
     std::vector<uint16_t> fat_;  // in-memory FAT table copy
     std::string cwd_path_;       // e.g. "/home/alice"
     uint16_t cwd_cluster_;       // 0 = root
     uint16_t cur_uid_;
     uint16_t cur_gid_;
+    // Open-file-table slot for the current session. FAT16 has no per-user
+    // permissions and this simulator has a single active user, so (like the
+    // UNIX engine) every session shares slot 0. This must NOT be cur_uid_:
+    // OpenFileTable rejects user_id >= MAX_USER, which would make any user
+    // with uid >= 8 unable to open files. See test HighUidCanOpenAndReadWrite.
+    uint16_t user_slot_ = 0;
     bool mounted_;
     std::string disk_path_;
 
@@ -135,8 +146,10 @@ class Fat16Fs : public IFileSystem {
     void fat16_to_vfs_entry(const FAT16DirEntry& fe, DirEntry& ve) const;
     void timestamp(uint16_t& t, uint16_t& d) const;
     uint32_t count_clusters(uint16_t start) const;
-    uint32_t get_file_size(uint16_t first_cluster) const;
-    void update_file_size(uint16_t first_cluster, uint32_t new_size);
+    // Read/update a file's size from its directory entry, searching only the
+    // file's own parent directory (dir_cluster). kRootCluster means the root.
+    uint32_t get_file_size(uint16_t dir_cluster, uint16_t first_cluster) const;
+    void update_file_size(uint16_t dir_cluster, uint16_t first_cluster, uint32_t new_size);
 };
 
 constexpr uint16_t Fat16Fs::kRootCluster;
