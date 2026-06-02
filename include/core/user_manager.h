@@ -27,6 +27,12 @@ class UserManager {
     // Returns user_id on success, -1 on failure. Sets current user.
     int login(const char* username, const char* password);
 
+    // Log in as root (uid 0) without a password. Used at startup so a session
+    // begins as root — matching the engine's default uid=0 context — instead of
+    // the inconsistent "logged out but still treated as root" state. Returns 0
+    // on success, -1 if no root account exists. Survives a changed root pw.
+    int login_root();
+
     // Logs out current user. Returns 0 on success, -1 if not logged in.
     int logout();
 

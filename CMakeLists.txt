@@ -5,6 +5,10 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Use the wide-character ncurses (ncursesw) so the TUI renders multi-byte
+# UTF-8 text (e.g. Chinese file names / content) instead of garbled bytes.
+# Combined with setlocale(LC_ALL, "") in the TUI, this enables Chinese display.
+set(CURSES_NEED_WIDE TRUE)
 find_package(Curses REQUIRED)
 
 # Collect all source files except main.cpp into a library

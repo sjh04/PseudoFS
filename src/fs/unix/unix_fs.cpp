@@ -143,9 +143,28 @@ int UnixFs::fs_open(const char* path, int flags) {
     if (ip == nullptr) {
         return -1;
     }
+    // A directory is not a regular file: refuse to open it. Without this, a
+    // write (e.g. `cp f dir`, `mv f dir`, or `open dir w`) would overwrite the
+    // directory's entry blocks with file bytes and corrupt it — later ls/find
+    // then read garbage entries and can crash. ls/cd use fs_ls/fs_chdir, not
+    // fs_open, so nothing legitimate needs to open a directory here.
+    if (ip->di.di_mode & MODE_DIR) {
+        imng_.put(ip);
+        return -1;
+    }
     if (!check_access(ip, static_cast<uint8_t>(flags))) {
         imng_.put(ip);
         return -1;
+    }
+    // O_TRUNC (e.g. `open f w`): discard the file's contents so a fresh write
+    // doesn't leave a stale tail. Only regular files are truncated; never
+    // directories or symlinks. The write permission needed for truncation is
+    // already covered by check_access above (O_TRUNC accompanies O_WRITE).
+    if ((flags & O_TRUNC) && (ip->di.di_mode & MODE_FILE)) {
+        imng_.truncate(ip);  // frees all data + indirect blocks, sets size 0
+        ip->di.di_mtime = static_cast<uint32_t>(std::time(nullptr));
+        ip->i_dirty = true;
+        imng_.write_back(ip);
     }
     imng_.put(ip);
 
@@ -472,6 +491,9 @@ int UnixFs::fs_chdir(const char* path) {
     // Update path string
     if (path[0] == '/') {
         cwd_path_ = std::string(path);
+        // Normalize a trailing slash (e.g. `cd /home/` or `cd ~` -> "/home/")
+        // so pwd shows "/home" rather than "/home/". Keep root as "/".
+        while (cwd_path_.size() > 1 && cwd_path_.back() == '/') cwd_path_.pop_back();
     } else {
         std::string p(path);
         // Handle ".." and "." in path

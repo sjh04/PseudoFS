@@ -36,6 +36,16 @@ int UserManager::login(const char* username, const char* password) {
     return -1;
 }
 
+int UserManager::login_root() {
+    for (int i = 0; i < user_count_; ++i) {
+        if (users_[i].uid == 0) {
+            current_index_ = i;
+            return 0;
+        }
+    }
+    return -1;
+}
+
 int UserManager::logout() {
     if (current_index_ < 0) {
         return -1;

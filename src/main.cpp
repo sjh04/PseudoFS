@@ -1,6 +1,8 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cerrno>
+#include <csignal>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -25,6 +27,65 @@ static const char* FAT16_DISK = "pfs_fat16.img";
 // both engines and both (CLI / TUI) modes.
 static const char* USERS_FILE = "pfs_users.dat";
 
+// ---- CLI input + Ctrl+C handling ----
+//
+// Ctrl+C should cancel the current input line and re-prompt (like a shell),
+// not kill the program. We install a SIGINT handler (no SA_RESTART) so a
+// blocked read(2) returns EINTR; the flag below tells the input layer it was
+// an interrupt rather than EOF/error. All CLI input goes through one buffered
+// reader (read_char) — both the prompt loop and the `more` pager — so there is
+// a single input stream with deterministic interrupt handling and no stdio
+// buffering surprises.
+static volatile sig_atomic_t g_sigint = 0;
+static void handle_sigint(int) {
+    g_sigint = 1;
+}
+
+static unsigned char g_inbuf[4096];
+static size_t g_inbuf_len = 0;
+static size_t g_inbuf_pos = 0;
+
+// Read one byte of CLI input. Returns 1 and sets *c on success, 0 on EOF,
+// -1 when interrupted by a signal (check g_sigint to tell Ctrl+C apart).
+static int read_char(char* c) {
+    if (g_inbuf_pos >= g_inbuf_len) {
+        ssize_t n = read(STDIN_FILENO, g_inbuf, sizeof(g_inbuf));
+        if (n < 0) return -1;  // EINTR or hard error
+        if (n == 0) return 0;  // EOF (Ctrl+D / closed pipe)
+        g_inbuf_len = static_cast<size_t>(n);
+        g_inbuf_pos = 0;
+    }
+    *c = static_cast<char>(g_inbuf[g_inbuf_pos++]);
+    return 1;
+}
+
+enum class LineResult { Ok, Eof, Canceled };
+
+// Read a full line (newline stripped) via read_char. Canceled => Ctrl+C.
+static LineResult read_line(std::string& out) {
+    out.clear();
+    while (true) {
+        char c;
+        int r = read_char(&c);
+        if (r == 1) {
+            if (c == '\n') return LineResult::Ok;
+            if (c != '\r') out.push_back(c);  // tolerate CRLF input
+        } else if (r == 0) {
+            // EOF: deliver a trailing partial line once, then signal EOF.
+            return out.empty() ? LineResult::Eof : LineResult::Ok;
+        } else {  // r < 0
+            if (errno == EINTR) {
+                if (g_sigint) {
+                    g_sigint = 0;
+                    return LineResult::Canceled;
+                }
+                continue;  // some other signal: keep reading
+            }
+            return LineResult::Eof;
+        }
+    }
+}
+
 // Explain a failed open: fs_open returns -1 for both "missing" and "denied".
 // If the path still resolves via stat, it exists and the open was blocked by a
 // permission check; otherwise it really isn't there. Lets commands report
@@ -32,6 +93,8 @@ static const char* USERS_FILE = "pfs_users.dat";
 static std::string open_error(IFileSystem& fs, const std::string& path) {
     FileStat st{};
     if (fs.fs_stat(path.c_str(), st) != 0) return "no such file";
+    // A directory can't be opened as a file (fs_open rejects it).
+    if (st.type == TYPE_DIR) return "is a directory";
     // The path exists. If it is a symlink, the open most likely failed because
     // its target is unresolvable — distinguish that from a real permission
     // denial (fs_stat is lstat-style, so statting the target tells us).
@@ -312,8 +375,13 @@ static void register_commands(CommandRegistry& reg) {
             const char* start = args[0].c_str();
             const std::string& pattern = args[1];
             out.clear();
-            // Recursive search
-            std::function<void(const std::string&)> search = [&](const std::string& dir) {
+            // Recursive search. The depth cap is defense-in-depth: a healthy
+            // tree is never this deep, but a directory corrupted by an earlier
+            // bug (or a future one) could otherwise drive infinite recursion and
+            // crash the program — bound it instead.
+            std::function<void(const std::string&, int)> search = [&](const std::string& dir,
+                                                                      int depth) {
+                if (depth > 64) return;
                 std::vector<DirEntry> entries;
                 if (fs.fs_ls(dir.c_str(), entries) != 0) return;
                 for (auto& e : entries) {
@@ -323,10 +391,10 @@ static void register_commands(CommandRegistry& reg) {
                     if (std::string(e.name).find(pattern) != std::string::npos) {
                         out += full + "\n";
                     }
-                    if (e.type == TYPE_DIR) search(full);
+                    if (e.type == TYPE_DIR) search(full, depth + 1);
                 }
             };
-            search(start);
+            search(start, 0);
             if (out.empty()) out = "(no matches)";
             return 0;
         },
@@ -485,14 +553,22 @@ static void register_commands(CommandRegistry& reg) {
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string& out) -> int {
             if (args.empty()) {
-                out = "Usage: touch <file>";
+                out = "Usage: touch <file>...";
                 return -1;
             }
-            int ret = fs.fs_create(args[0].c_str(), DEFAULT_MODE);
-            if (ret != 0) out = "touch: failed (file may already exist)";
-            return ret;
+            // Create each file; report per-file failures but keep going, like
+            // the other multi-target commands (rm/rmdir/ls/cat).
+            int rc = 0;
+            for (const auto& f : args) {
+                if (fs.fs_create(f.c_str(), DEFAULT_MODE) != 0) {
+                    out += "touch: '" + f + "': failed (may already exist)\n";
+                    rc = -1;
+                }
+            }
+            while (!out.empty() && out.back() == '\n') out.pop_back();
+            return rc;
         },
-        "touch <file> — create file");
+        "touch <file>... — create file(s)");
 
     reg.register_cmd(
         "rm",
@@ -536,7 +612,7 @@ static void register_commands(CommandRegistry& reg) {
             int flags = O_READ;
             if (args.size() > 1) {
                 if (args[1] == "w")
-                    flags = O_WRITE;
+                    flags = O_WRITE | O_TRUNC;  // `w` discards old contents (fopen "w")
                 else if (args[1] == "rw")
                     flags = O_READ | O_WRITE;
                 else if (args[1] == "a")
@@ -775,7 +851,9 @@ static void register_commands(CommandRegistry& reg) {
                 return -1;
             }
             fs.fs_create(args[1].c_str(), DEFAULT_MODE);
-            int dst_fd = fs.fs_open(args[1].c_str(), O_WRITE);
+            // O_TRUNC so copying onto an existing (longer) file leaves no tail.
+            // (fs_open refuses a directory dst, so `cp f dir` errors, not corrupt.)
+            int dst_fd = fs.fs_open(args[1].c_str(), O_WRITE | O_TRUNC);
             if (dst_fd < 0) {
                 fs.fs_close(src_fd);
                 out = "cp: cannot create dest";
@@ -882,7 +960,7 @@ static void register_commands(CommandRegistry& reg) {
                 return -1;
             }
             fs.fs_create(args[1].c_str(), DEFAULT_MODE);
-            int dfd = fs.fs_open(args[1].c_str(), O_WRITE);
+            int dfd = fs.fs_open(args[1].c_str(), O_WRITE | O_TRUNC);
             if (dfd < 0) {
                 fs.fs_close(sfd);
                 out = "mv: cannot create dest";
@@ -997,15 +1075,24 @@ static void cli_page(const std::string& content) {
         std::printf("\033[7m--More-- (%d/%d) [Enter=more, q=quit]\033[0m",
                     std::min(top + page, total), total);
         std::fflush(stdout);
-        int c = std::getchar();
-        if (c != '\n' && c != EOF) {
+        // Read the key via the shared buffered reader. Ctrl+C (or EOF) quits
+        // the pager and returns to the prompt rather than killing the program.
+        char ch;
+        int r = read_char(&ch);
+        if (r <= 0) {  // EOF or interrupted -> quit pager
+            if (r < 0 && errno == EINTR && g_sigint) g_sigint = 0;
+            std::printf("\r\033[K");
+            break;
+        }
+        int c = static_cast<unsigned char>(ch);
+        if (c != '\n') {
             while (true) {  // swallow the rest of the input line
-                int d = std::getchar();
-                if (d == '\n' || d == EOF) break;
+                char d;
+                if (read_char(&d) != 1 || d == '\n') break;
             }
         }
         std::printf("\r\033[K");  // erase the --More-- prompt
-        if (c == 'q' || c == 'Q' || c == EOF) break;
+        if (c == 'q' || c == 'Q') break;
     }
 }
 
@@ -1028,6 +1115,25 @@ int main(int argc, char* argv[]) {
     if (!force_format) um.load_from_file(USERS_FILE);  // restore prior accounts
     um.set_persist_path(USERS_FILE);                   // auto-save on useradd/passwd
     if (force_format) um.save_to_file(USERS_FILE);     // --format: reset to root
+    // Begin the session as root so the login state matches the engine's default
+    // uid=0 context: `useradd` works immediately and the UI shows "root" rather
+    // than the misleading "logged out yet acting as root". `logout` still drops
+    // the session; users can `login`/`su` to any account afterwards.
+    um.login_root();
+
+    // Install the SIGINT (Ctrl+C) handler before either mode starts.
+    //  - CLI: read_line() sees the EINTR and cancels the current input line.
+    //  - TUI: wgetch() returns ERR (handled as a normal "refresh" tick), so
+    //    Ctrl+C is simply ignored — F10 exits. Because we install this first,
+    //    ncurses leaves SIGINT to us (it only catches signals left at SIG_DFL),
+    //    so Ctrl+C no longer kills the TUI and corrupts the terminal.
+    // No SA_RESTART, so the blocked read(2)/wgetch returns EINTR.
+    struct sigaction sa;
+    std::memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = handle_sigint;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGINT, &sa, nullptr);
 
     if (use_tui) {
         // --- TUI mode: each engine gets its OWN BlockDevice ---
@@ -1115,15 +1221,21 @@ int main(int argc, char* argv[]) {
         },
         "history — show command history");
 
-    char input[1024];
+    // Buffered read(2)-based input: command lines are unbounded (no char[1024]
+    // + fgets cap that truncated long `write` bodies and leaked the overflow as
+    // a bogus next command), and Ctrl+C is handled cleanly.
+    std::string input;
     while (true) {
         std::printf("\033[32m%s\033[0m$ ", fs->fs_pwd().c_str());
         std::fflush(stdout);
-        if (std::fgets(input, sizeof(input), stdin) == nullptr) break;
-
-        size_t len = std::strlen(input);
-        if (len > 0 && input[len - 1] == '\n') input[len - 1] = '\0';
-        if (input[0] == '\0') continue;
+        LineResult lr = read_line(input);
+        if (lr == LineResult::Eof) break;       // Ctrl+D / closed pipe -> quit
+        if (lr == LineResult::Canceled) {  // Ctrl+C -> abandon line, re-prompt
+            // The terminal already echoes "^C"; just break the line like a shell.
+            std::printf("\n");
+            continue;
+        }
+        if (input.empty()) continue;
 
         history.push_back(input);
 

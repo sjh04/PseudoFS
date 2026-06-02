@@ -9,6 +9,7 @@ namespace pfs {
 constexpr int O_READ = 1;
 constexpr int O_WRITE = 2;
 constexpr int O_APPEND = 4;
+constexpr int O_TRUNC = 8;  // discard existing contents on open (e.g. `open f w`)
 
 constexpr uint8_t TYPE_FILE = 0;
 constexpr uint8_t TYPE_DIR = 1;
