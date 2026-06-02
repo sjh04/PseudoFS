@@ -33,7 +33,7 @@ cmake .. && make -j$(nproc)
 ./pfs_tests
 ```
 
-预置用户 **root / root**；要创建其他用户需先 `login root root`，再 `useradd <name> <pw> <uid> <gid>`。
+预置用户 **root / root**，启动时自动以 root 身份登录，可直接 `useradd <name> <pw> <uid> <gid>` 创建用户。`logout` 后需重新 `login` / `su` 才能再操作。
 
 ## Project Structure
 
