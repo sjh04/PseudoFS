@@ -160,6 +160,19 @@ int Fat16Fs::fs_open(const char* path, int flags) {
     read_dir_entries(parent, entries);
     for (auto& e : entries) {
         if (to_upper(name) == entry_name(e)) {
+            // Refuse to open a directory as a file: a write would overwrite its
+            // entry blocks and corrupt it (cp/mv onto a dir name, `open dir w`).
+            if (e.attr & FAT16_ATTR_DIRECTORY) return -1;
+            // O_TRUNC (e.g. `open f w`): drop existing contents. Keep the first
+            // cluster as the (now empty) chain head, free the rest, and reset the
+            // recorded size. FAT16 has no rwx bits, so no extra permission check.
+            if ((flags & O_TRUNC) && !(e.attr & FAT16_ATTR_DIRECTORY) && e.first_cluster >= 2) {
+                uint16_t rest = fat_[e.first_cluster];
+                fat_[e.first_cluster] = FAT16_END_OF_CHAIN;
+                free_cluster_chain(rest);  // frees the rest (no-op if EOC); flushes FAT
+                update_file_size(parent, e.first_cluster, 0);
+                sync();
+            }
             int fd = oft_.alloc_fd(user_slot_, e.first_cluster, static_cast<uint8_t>(flags));
             if (fd >= 0) {
                 open_parent_[fd] = parent;  // remember where the entry lives

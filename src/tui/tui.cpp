@@ -761,9 +761,15 @@ void Tui::run() {
                 break;
             }
             default:
-                if (ch >= 32 && ch < 127) {
-                    input_buf.push_back(static_cast<char>(ch));
-                    waddch(w.term_win, static_cast<char>(ch));
+                // Accept printable ASCII *and* raw UTF-8 bytes (0x80-0xFF) so
+                // multi-byte input (e.g. Chinese) reaches the command line.
+                // Bound to <=255 to exclude ncurses KEY_* codes (>=256); cast via
+                // unsigned char so high bytes are not sign-extended in waddch
+                // (ncursesw reassembles the byte sequence into the glyph).
+                if (ch >= 32 && ch <= 255 && ch != 127) {
+                    unsigned char byte = static_cast<unsigned char>(ch);
+                    input_buf.push_back(static_cast<char>(byte));
+                    waddch(w.term_win, byte);
                     wrefresh(w.term_win);
                 }
                 break;
