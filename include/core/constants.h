@@ -6,7 +6,7 @@ namespace pfs {
 
 constexpr uint32_t BLOCK_SIZE = 512;
 
-// Disk layout (block numbers)
+// 磁盘布局(块号)
 constexpr uint32_t BOOT_BLK = 0;
 constexpr uint32_t SUPER_BLK = 1;
 constexpr uint32_t INODE_START_BLK = 2;
@@ -15,7 +15,7 @@ constexpr uint32_t DATA_START_BLK = INODE_START_BLK + INODE_BLK_NUM;  // 34
 constexpr uint32_t DATA_BLK_NUM = 512;
 constexpr uint32_t TOTAL_BLK_NUM = DATA_START_BLK + DATA_BLK_NUM;  // 546
 
-// INode
+// inode
 constexpr uint32_t INODE_SIZE = 64;
 constexpr uint32_t INODES_PER_BLK = BLOCK_SIZE / INODE_SIZE;      // 8
 constexpr uint32_t INODE_TOTAL = INODE_BLK_NUM * INODES_PER_BLK;  // 256
@@ -23,27 +23,27 @@ constexpr uint32_t NADDR = 10;
 constexpr uint32_t DIRECT_ADDR = 6;
 constexpr uint32_t PTRS_PER_BLK = BLOCK_SIZE / sizeof(uint16_t);  // 256
 
-// Group-linked free list
+// 成组链接法的空闲块链
 constexpr uint32_t NICFREE = 50;
 constexpr uint32_t NICINOD = 50;
 
-// Directory
+// 目录
 constexpr uint32_t MAX_FILENAME = 14;
 constexpr uint32_t DIR_ENTRY_SIZE = MAX_FILENAME + 2;                  // 16
 constexpr uint32_t DIR_ENTRIES_PER_BLK = BLOCK_SIZE / DIR_ENTRY_SIZE;  // 32
 constexpr uint32_t DIRNUM = 128;
 
-// Open file table
+// 打开文件表
 constexpr uint32_t MAX_OPEN_FILE = 20;
 constexpr uint32_t SYS_OPEN_FILE = 40;
 constexpr uint32_t MAX_USER = 8;
 
-// File mode bits (type stored in the high bits of di_mode)
+// 文件模式位(文件类型存放在 di_mode 的高位)
 constexpr uint16_t MODE_FILE = 0x0400;
 constexpr uint16_t MODE_DIR = 0x0800;
-constexpr uint16_t MODE_SYMLINK = 0x1000;  // symbolic link; data block holds target path
+constexpr uint16_t MODE_SYMLINK = 0x1000;  // 符号链接;数据块里存放目标路径
 
-// Standard UNIX permission bits (octal layout)
+// 标准 UNIX 权限位(八进制布局)
 constexpr uint16_t PERM_OX = 0001;
 constexpr uint16_t PERM_OW = 0002;
 constexpr uint16_t PERM_OR = 0004;
@@ -55,7 +55,7 @@ constexpr uint16_t PERM_UW = 0200;
 constexpr uint16_t PERM_UR = 0400;
 constexpr uint16_t DEFAULT_MODE = 0777;  // rwxrwxrwx
 
-// Sentinel values
+// 哨兵值
 constexpr uint16_t INVALID_BLK = 0xFFFF;
 constexpr uint16_t END_OF_CHAIN = 0;
 

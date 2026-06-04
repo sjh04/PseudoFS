@@ -12,7 +12,7 @@
 namespace pfs {
 
 #pragma pack(push, 1)
-// --- FAT16 on-disk structures (packed, no padding) ---
+// --- FAT16 磁盘结构(紧凑排布,无对齐填充) ---
 
 constexpr uint16_t FAT16_END_OF_CHAIN = 0xFFFF;
 constexpr uint16_t FAT16_FREE_CLUSTER = 0x0000;
@@ -21,7 +21,7 @@ constexpr uint8_t FAT16_ATTR_READ_ONLY = 0x01;
 constexpr uint8_t FAT16_ATTR_DIRECTORY = 0x10;
 constexpr uint8_t FAT16_ATTR_ARCHIVE = 0x20;
 
-// Minimal boot sector stored in block 0
+// 精简版引导扇区,存在 0 号块,记录卷的几何参数(块大小、FAT 大小等)
 struct FAT16BootSector {
     char volume_label[11];
     uint16_t bytes_per_sector;    // 512
@@ -31,26 +31,28 @@ struct FAT16BootSector {
     uint16_t root_entry_count;    // 16
     uint16_t total_sectors;       // 546
     uint16_t fat_size_sectors;    // 4
-    uint8_t _pad[489];            // pad to 512 bytes
+    uint8_t _pad[489];            // 补齐到 512 字节
 };
 
 static_assert(sizeof(FAT16BootSector) == 512, "BootSector must be 512 bytes");
 
-// Directory entry (32 bytes, DOS-compatible)
+// 目录项(32 字节,兼容 DOS):8.3 文件名 + 起始簇号 + 大小
 struct FAT16DirEntry {
-    char name[8];  // filename, space-padded
-    char ext[3];   // extension
-    uint8_t attr;  // attributes
+    char name[8];  // 文件名,不足 8 字符用空格补齐
+    char ext[3];   // 扩展名
+    uint8_t attr;  // 属性位(目录/文件/只读…)
     uint8_t reserved[10];
-    uint16_t time;           // modified time
-    uint16_t date;           // modified date
-    uint16_t first_cluster;  // starting cluster
-    uint32_t file_size;      // file size in bytes
+    uint16_t time;           // 修改时间
+    uint16_t date;           // 修改日期
+    uint16_t first_cluster;  // 起始簇号(文件 = 一条簇链)
+    uint32_t file_size;      // 文件大小(字节)
 };
 
 static_assert(sizeof(FAT16DirEntry) == 32, "DirEntry must be 32 bytes");
 #pragma pack(pop)
 
+// FAT16 引擎:引导扇区 + FAT 表×2 + 根目录区 + 数据区,文件用簇链组织。
+// 实现 IFileSystem,和 UNIX 引擎并列挂在 VFS 下,可在 TUI 中切换。
 class Fat16Fs : public IFileSystem {
    public:
     explicit Fat16Fs(BlockDevice& dev);
@@ -88,10 +90,11 @@ class Fat16Fs : public IFileSystem {
 
    private:
     void sync();
-    // --- FAT16 disk layout constants ---
+    // --- FAT16 磁盘布局常量 ---
+    // 块号: [0]引导 / [1..4]FAT1 / [5..8]FAT2 / [9]根目录区 / [10..]数据区
     static constexpr uint32_t kBootBlk = 0;
     static constexpr uint32_t kFat1Start = 1;
-    static constexpr uint32_t kFatSize = 4;  // blocks per FAT
+    static constexpr uint32_t kFatSize = 4;  // 每张 FAT 占的块数
     static constexpr uint32_t kFat2Start = 5;
     static constexpr uint32_t kRootDirBlk = 9;
     static constexpr uint32_t kDataStart = 10;
@@ -99,31 +102,29 @@ class Fat16Fs : public IFileSystem {
     static constexpr uint32_t kDirEntriesPerBlk = BLOCK_SIZE / 32;             // 16
     static constexpr uint32_t kClustersPerFat = kFatSize * kEntriesPerFatBlk;  // 1024
     static constexpr uint32_t kDataBlkCount = TOTAL_BLK_NUM - kDataStart;      // 536
-    static constexpr uint16_t kRootCluster = 0;                                // Sentinel for root
+    static constexpr uint16_t kRootCluster = 0;                                // 根目录的哨兵簇号
 
     BlockDevice& dev_;
     OpenFileTable oft_;
-    // Parent directory cluster of each open fd, captured at open time so the
-    // file-size accessors can go straight to the real directory entry instead
-    // of brute-force scanning every cluster (which could alias file data as a
-    // directory). Indexed by user fd; valid only while the fd is open.
+    // 每个打开 fd 所属的父目录簇号,在 open 时记下来,这样查/改文件大小
+    // 时能直接定位到对应的目录项,而不必扫遍所有簇(否则文件数据可能被
+    // 误当成目录项)。按用户 fd 下标索引,只在 fd 打开期间有效。
     uint16_t open_parent_[MAX_OPEN_FILE] = {};
     FAT16BootSector boot_;
-    std::vector<uint16_t> fat_;  // in-memory FAT table copy
-    std::string cwd_path_;       // e.g. "/home/alice"
-    uint16_t cwd_cluster_;       // 0 = root
+    std::vector<uint16_t> fat_;  // 内存中的 FAT 表副本
+    std::string cwd_path_;       // 形如 "/home/alice"
+    uint16_t cwd_cluster_;       // 0 = 根目录
     uint16_t cur_uid_;
     uint16_t cur_gid_;
-    // Open-file-table slot for the current session. FAT16 has no per-user
-    // permissions and this simulator has a single active user, so (like the
-    // UNIX engine) every session shares slot 0. This must NOT be cur_uid_:
-    // OpenFileTable rejects user_id >= MAX_USER, which would make any user
-    // with uid >= 8 unable to open files. See test HighUidCanOpenAndReadWrite.
+    // 当前会话使用的打开文件表槽位。FAT16 没有按用户的权限,且本模拟器
+    // 同时只有一个活动用户,所以(和 UNIX 引擎一样)所有会话共用 0 号槽。
+    // 注意这里不能用 cur_uid_:OpenFileTable 会拒绝 user_id >= MAX_USER,
+    // 那样 uid >= 8 的用户就打不开文件了。见测试 HighUidCanOpenAndReadWrite。
     uint16_t user_slot_ = 0;
     bool mounted_;
     std::string disk_path_;
 
-    // --- Internal helpers ---
+    // --- 内部辅助函数 ---
     uint32_t cluster_to_block(uint16_t cluster) const;
     int read_fat_entry(uint16_t cluster, uint16_t& out) const;
     int write_fat_entry(uint16_t cluster, uint16_t value);
@@ -146,8 +147,8 @@ class Fat16Fs : public IFileSystem {
     void fat16_to_vfs_entry(const FAT16DirEntry& fe, DirEntry& ve) const;
     void timestamp(uint16_t& t, uint16_t& d) const;
     uint32_t count_clusters(uint16_t start) const;
-    // Read/update a file's size from its directory entry, searching only the
-    // file's own parent directory (dir_cluster). kRootCluster means the root.
+    // 从目录项读取/更新文件大小,只在文件自己的父目录(dir_cluster)里查找。
+    // dir_cluster 等于 kRootCluster 表示根目录。
     uint32_t get_file_size(uint16_t dir_cluster, uint16_t first_cluster) const;
     void update_file_size(uint16_t dir_cluster, uint16_t first_cluster, uint32_t new_size);
 };

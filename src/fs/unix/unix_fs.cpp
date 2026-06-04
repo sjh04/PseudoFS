@@ -6,6 +6,8 @@
 
 namespace pfs {
 
+// 构造时按依赖顺序把下层模块串起来:超级块吃块设备,inode 管理器吃超级块,
+// 目录管理器吃 inode 管理器。初值是"未挂载、当前在根、当前用户 root"。
 UnixFs::UnixFs(BlockDevice& dev)
     : dev_(dev),
       sb_(dev),
@@ -20,16 +22,19 @@ UnixFs::UnixFs(BlockDevice& dev)
       user_slot_(0) {
 }
 
-// ---- Lifecycle ----
+// ---- 生命周期 ----
 
+// format:把裸盘初始化成一个可挂载的文件卷,必答题 Q3 的全过程都在这。
+// 顺序:清零整盘 → 超级块建成组空闲块链 + 空闲 inode 栈 → 建根目录(写 . 和 ..)
+// → 预置 /etc /home 两个目录 → 回填根 inode 号 → 落盘。
 int UnixFs::fs_format() {
     dev_.zero_all();
 
-    // Reserve inode 0 (unused sentinel) and inodes 1 (root dir).
-    // Reserve data blocks 0..2 (root dir, etc dir, password file — matching PPT).
+    // 保留 inode 0(空哨兵,不用)和 inode 1(根目录)。
+    // 保留数据块 0..2(根目录、etc 目录、密码文件,对齐 PPT)。
     sb_.format(3, 2);
 
-    // Create root directory at inode 1
+    // 在 inode 1 上建根目录
     MemINode* root_ip = imng_.alloc(MODE_DIR | DEFAULT_MODE, 0, 0);
     if (root_ip == nullptr) {
         return -1;
@@ -38,7 +43,7 @@ int UnixFs::fs_format() {
     dmng_.init_dir(root_ip, root_ino_, root_ino_);
     imng_.write_back(root_ip);
 
-    // Create /etc directory
+    // 建 /etc 目录
     MemINode* etc_ip = imng_.alloc(MODE_DIR | DEFAULT_MODE, 0, 0);
     if (etc_ip != nullptr) {
         dmng_.init_dir(etc_ip, etc_ip->i_ino, root_ino_);
@@ -47,7 +52,7 @@ int UnixFs::fs_format() {
         imng_.put(etc_ip);
     }
 
-    // Create /home directory
+    // 建 /home 目录
     MemINode* home_ip = imng_.alloc(MODE_DIR | DEFAULT_MODE, 0, 0);
     if (home_ip != nullptr) {
         dmng_.init_dir(home_ip, home_ip->i_ino, root_ino_);
@@ -68,6 +73,8 @@ int UnixFs::fs_format() {
     return 0;
 }
 
+// mount:挂载已格式化的旧盘。从盘上读回超级块,取出根 inode 号,
+// 当前目录复位到根,空闲链/inode 栈随超级块一并恢复。
 int UnixFs::fs_mount() {
     sb_.load();
     root_ino_ = sb_.root_inode();
@@ -77,6 +84,7 @@ int UnixFs::fs_mount() {
     return 0;
 }
 
+// unmount:卸载前把超级块刷回盘,保证空闲链/inode 栈的最新状态不丢。
 int UnixFs::fs_unmount() {
     if (!mounted_) {
         return -1;
@@ -86,8 +94,10 @@ int UnixFs::fs_unmount() {
     return 0;
 }
 
-// ---- File operations ----
+// ---- 文件操作 ----
 
+// create:在父目录下建一个新空文件。先 namei_parent 定位父目录、查父目录写权限、
+// 查重名,再 alloc 新 inode、link 进父目录。任一步失败都把已分配的资源回滚干净。
 int UnixFs::fs_create(const char* path, uint16_t mode) {
     std::string basename;
     uint16_t parent_ino = dmng_.namei_parent(path, cwd_ino_, root_ino_, basename);
@@ -131,9 +141,11 @@ int UnixFs::fs_create(const char* path, uint16_t mode) {
     return 0;
 }
 
+// open:把路径变成 fd。流程是 namei → 权限校验 →(按需)截断 → 在打开文件表占一项。
+// 返回的 fd 是后续 read/write 的句柄,文件位置/模式都记在打开文件表里。
 int UnixFs::fs_open(const char* path, int flags) {
-    // Follow a trailing symlink so "cat link" / "cp link ..." act on the
-    // target file (and permission checks below use the target's mode).
+    // 跟随末端软链接,让 "cat link" / "cp link ..." 作用到目标文件
+    //(下面的权限检查也就用目标的 mode)。
     uint16_t ino = namei_follow(path);
     if (ino == INVALID_BLK) {
         return -1;
@@ -143,11 +155,10 @@ int UnixFs::fs_open(const char* path, int flags) {
     if (ip == nullptr) {
         return -1;
     }
-    // A directory is not a regular file: refuse to open it. Without this, a
-    // write (e.g. `cp f dir`, `mv f dir`, or `open dir w`) would overwrite the
-    // directory's entry blocks with file bytes and corrupt it — later ls/find
-    // then read garbage entries and can crash. ls/cd use fs_ls/fs_chdir, not
-    // fs_open, so nothing legitimate needs to open a directory here.
+    // 目录不是普通文件,拒绝 open。否则一次写(如 `cp f dir`、`mv f dir`、
+    // `open dir w`)会把目录的目录项块覆盖成文件字节而损坏目录——之后
+    // ls/find 读到乱码目录项就可能崩。ls/cd 走的是 fs_ls/fs_chdir 而非
+    // fs_open,所以这里不存在合法地打开目录的需求。
     if (ip->di.di_mode & MODE_DIR) {
         imng_.put(ip);
         return -1;
@@ -156,12 +167,11 @@ int UnixFs::fs_open(const char* path, int flags) {
         imng_.put(ip);
         return -1;
     }
-    // O_TRUNC (e.g. `open f w`): discard the file's contents so a fresh write
-    // doesn't leave a stale tail. Only regular files are truncated; never
-    // directories or symlinks. The write permission needed for truncation is
-    // already covered by check_access above (O_TRUNC accompanies O_WRITE).
+    // O_TRUNC(如 `open f w`):清空文件内容,免得新写的内容后面拖着旧尾巴。
+    // 只截断普通文件,绝不动目录或软链接。截断需要的写权限上面 check_access
+    // 已经覆盖(O_TRUNC 总和 O_WRITE 一起出现)。
     if ((flags & O_TRUNC) && (ip->di.di_mode & MODE_FILE)) {
-        imng_.truncate(ip);  // frees all data + indirect blocks, sets size 0
+        imng_.truncate(ip);  // 释放全部数据块+间址块,大小置 0
         ip->di.di_mtime = static_cast<uint32_t>(std::time(nullptr));
         ip->i_dirty = true;
         imng_.write_back(ip);
@@ -184,6 +194,7 @@ int UnixFs::fs_open(const char* path, int flags) {
     return fd;
 }
 
+// close:从打开文件表里释放这个 fd;成功后顺手落一次盘。
 int UnixFs::fs_close(int fd) {
     int ret = oft_.free_fd(user_slot_, fd);
     if (ret == 0) {
@@ -192,6 +203,8 @@ int UnixFs::fs_close(int fd) {
     return ret;
 }
 
+// read:读写主链路 fd → 打开文件表 → inode → bmap → 块设备 的读方向。
+// 按当前偏移逐块读,bmap 返回 0 的"洞"块直接补零,末尾按文件大小截断。
 ssize_t UnixFs::fs_read(int fd, void* buf, size_t len) {
     if (!oft_.is_valid(user_slot_, fd)) {
         return -1;
@@ -244,6 +257,8 @@ ssize_t UnixFs::fs_read(int fd, void* buf, size_t len) {
     return static_cast<ssize_t>(bytes_read);
 }
 
+// write:读写主链路的写方向。逐块走 bmap_alloc——缺块就现场分配,
+// 不满整块时先读回再改(读改写),最后按需扩大文件大小。盘满则提前收尾。
 ssize_t UnixFs::fs_write(int fd, const void* buf, size_t len) {
     if (!oft_.is_valid(user_slot_, fd)) {
         return -1;
@@ -295,6 +310,9 @@ ssize_t UnixFs::fs_write(int fd, const void* buf, size_t len) {
     return static_cast<ssize_t>(bytes_written);
 }
 
+// delete:删一个普通文件(rm)。注意它只做两件事——从父目录 unlink + nlink--。
+// 真正回收数据块和 inode 不在这,而是等最后一个引用 put 到 nlink==0 时由 iput 完成。
+// 这样 rm 一个还开着的文件也不会出错。
 int UnixFs::fs_delete(const char* path) {
     std::string basename;
     uint16_t parent_ino = dmng_.namei_parent(path, cwd_ino_, root_ino_, basename);
@@ -341,6 +359,8 @@ int UnixFs::fs_delete(const char* path) {
     return 0;
 }
 
+// delete_recursive:rm -r。后序删除——先递归清空所有子项,再 rmdir 自己。
+// 软链接当叶子处理,只删链接本身、不跟随,目标原封不动。
 int UnixFs::fs_delete_recursive(const char* path) {
     FileStat st{};
     if (fs_stat(path, st) != 0) {
@@ -348,12 +368,12 @@ int UnixFs::fs_delete_recursive(const char* path) {
     }
 
     if (st.type != TYPE_DIR) {
-        // Files and symlinks are leaves; unlink directly (a symlink is removed,
-        // never followed, so its target is left untouched).
+        // 文件和软链接都是叶子,直接 unlink(软链接只删自己、从不跟随,
+        // 所以它的目标不受影响)。
         return fs_delete(path);
     }
 
-    // It's a directory — delete all children first
+    // 是目录——先把所有子项删掉
     std::vector<DirEntry> entries;
     if (fs_ls(path, entries) != 0) {
         return -1;
@@ -375,8 +395,10 @@ int UnixFs::fs_delete_recursive(const char* path) {
     return fs_rmdir(path);
 }
 
-// ---- Directory operations ----
+// ---- 目录操作 ----
 
+// mkdir:建子目录。和 create 类似,但额外用 init_dir 写好 . 和 ..,
+// 然后把新目录 link 进父目录。
 int UnixFs::fs_mkdir(const char* path) {
     std::string basename;
     uint16_t parent_ino = dmng_.namei_parent(path, cwd_ino_, root_ino_, basename);
@@ -408,12 +430,10 @@ int UnixFs::fs_mkdir(const char* path) {
     dmng_.init_dir(new_ip, new_ip->i_ino, parent_ino);
     dmng_.link(parent_ip, basename.c_str(), new_ip->i_ino);
 
-    // NOTE: directory link counts are intentionally left at 1 instead of the
-    // classic "2 + subdirs" (a dir's own "." plus each child's ".."). This is
-    // cosmetic only — `ll` shows 1 for directories — and rmdir does not depend
-    // on it (it checks emptiness and force-zeroes nlink). Maintaining it would
-    // require ++ on both this inode and the parent here, with matching
-    // decrements in fs_rmdir.
+    // 注意:目录的链接计数有意保持为 1,没有用经典的"2 + 子目录数"
+    //(目录自己的 "." 加上每个子目录的 "..")。这纯属显示问题——`ll` 里目录
+    // 显示为 1——rmdir 也不依赖它(rmdir 查的是是否为空,并强制把 nlink 归零)。
+    // 想维护它就得在这里给本 inode 和父 inode 都 ++,并在 fs_rmdir 里对应 --。
 
     imng_.write_back(new_ip);
     imng_.write_back(parent_ip);
@@ -423,6 +443,8 @@ int UnixFs::fs_mkdir(const char* path) {
     return 0;
 }
 
+// rmdir:删空目录。必须先确认目录为空(只剩 . 和 ..)才动手。
+// 同样只 unlink + 把 nlink 归零,块的回收交给 iput。
 int UnixFs::fs_rmdir(const char* path) {
     std::string basename;
     uint16_t parent_ino = dmng_.namei_parent(path, cwd_ino_, root_ino_, basename);
@@ -470,10 +492,11 @@ int UnixFs::fs_rmdir(const char* path) {
     return 0;
 }
 
+// chdir:切换当前目录。两部分活——cwd_ino_ 跟着目标走(真正用于后续相对路径解析),
+// cwd_path_ 维护给 pwd 看的路径字符串(自己处理 . 和 .. 的归一)。
 int UnixFs::fs_chdir(const char* path) {
-    // Follow a trailing symlink so "cd link_to_dir" enters the target. The
-    // path string below is kept as the (logical) argument; cwd_ino_ tracks the
-    // real target, which is what subsequent relative lookups use.
+    // 跟随末端软链接,让 "cd link_to_dir" 进入目标目录。下面的路径字符串
+    // 保留为(逻辑上的)入参;cwd_ino_ 跟踪真实目标,后续相对查找用的是它。
     uint16_t ino = namei_follow(path);
     if (ino == INVALID_BLK) {
         return -1;
@@ -488,17 +511,17 @@ int UnixFs::fs_chdir(const char* path) {
 
     cwd_ino_ = ino;
 
-    // Update path string
+    // 更新路径字符串
     if (path[0] == '/') {
         cwd_path_ = std::string(path);
-        // Normalize a trailing slash (e.g. `cd /home/` or `cd ~` -> "/home/")
-        // so pwd shows "/home" rather than "/home/". Keep root as "/".
+        // 归一末尾斜杠(如 `cd /home/` 或 `cd ~` -> "/home/"),让 pwd 显示
+        // "/home" 而不是 "/home/"。根目录保持为 "/"。
         while (cwd_path_.size() > 1 && cwd_path_.back() == '/') cwd_path_.pop_back();
     } else {
         std::string p(path);
-        // Handle ".." and "." in path
+        // 处理路径里的 ".." 和 "."
         auto parts = std::vector<std::string>();
-        // Parse current cwd_path_
+        // 先解析当前 cwd_path_
         size_t start = 0;
         std::string base = cwd_path_;
         while (start < base.size()) {
@@ -511,7 +534,7 @@ int UnixFs::fs_chdir(const char* path) {
             parts.push_back(base.substr(start, end - start));
             start = end + 1;
         }
-        // Apply relative path components
+        // 再把相对路径的各段叠加上去
         start = 0;
         while (start < p.size()) {
             if (p[start] == '/') {
@@ -539,6 +562,8 @@ int UnixFs::fs_chdir(const char* path) {
     return 0;
 }
 
+// ls:列目录。读出原始目录项后,逐项 get 对应 inode 补上类型/大小,
+// 跳过 d_ino==0 的空槽。不带 path 时列当前目录。
 int UnixFs::fs_ls(const char* path, std::vector<DirEntry>& out) {
     uint16_t ino =
         (path == nullptr || path[0] == '\0') ? cwd_ino_ : dmng_.namei(path, cwd_ino_, root_ino_);
@@ -582,12 +607,15 @@ int UnixFs::fs_ls(const char* path, std::vector<DirEntry>& out) {
     return 0;
 }
 
+// pwd:直接返回 chdir 一路维护好的当前路径字符串。
 std::string UnixFs::fs_pwd() {
     return cwd_path_;
 }
 
-// ---- Metadata ----
+// ---- 元数据 ----
 
+// stat:把 inode 的元信息(mode/uid/gid/大小/三个时间戳/nlink/类型)抄进 FileStat。
+// 走的是 lstat 语义——报告链接本身而非目标,这样 ls/ll/stat 能把它认作软链接。
 int UnixFs::fs_stat(const char* path, FileStat& out) {
     uint16_t ino = dmng_.namei(path, cwd_ino_, root_ino_);
     if (ino == INVALID_BLK) {
@@ -607,8 +635,7 @@ int UnixFs::fs_stat(const char* path, FileStat& out) {
     out.mtime = ip->di.di_mtime;
     out.ctime = ip->di.di_ctime;
     out.nlink = ip->di.di_nlink;
-    // lstat semantics: report the link itself, not its target, so ls/ll/stat
-    // can show it as a symlink.
+    // lstat 语义:报告链接自身而非目标,这样 ls/ll/stat 能显示成软链接。
     if (ip->di.di_mode & MODE_DIR)
         out.type = TYPE_DIR;
     else if (ip->di.di_mode & MODE_SYMLINK)
@@ -619,6 +646,8 @@ int UnixFs::fs_stat(const char* path, FileStat& out) {
     return 0;
 }
 
+// chmod:改权限位。只动低 9 位 rwx(mode & 0x01FF),高位的文件类型(目录/软链接等)
+// 原样保留,所以 chmod 不会把目录改成普通文件。
 int UnixFs::fs_chmod(const char* path, uint16_t mode) {
     uint16_t ino = dmng_.namei(path, cwd_ino_, root_ino_);
     if (ino == INVALID_BLK) {
@@ -638,6 +667,9 @@ int UnixFs::fs_chmod(const char* path, uint16_t mode) {
     return 0;
 }
 
+// link:硬链接(ln)。在 dst 父目录里加一条新目录项指向 src 同一个 inode,
+// 并把 src 的 nlink++——硬链接的本质就是"多一个名字指向同一 inode"。
+// 不允许给目录建硬链接(防成环)。
 int UnixFs::fs_link(const char* src, const char* dst) {
     uint16_t src_ino = dmng_.namei(src, cwd_ino_, root_ino_);
     if (src_ino == INVALID_BLK) {
@@ -679,6 +711,8 @@ int UnixFs::fs_link(const char* src, const char* dst) {
     return 0;
 }
 
+// symlink:软链接(ln -s)。和硬链接不同,它是一个独立的新 inode,
+// 内容就是目标路径字符串(存进它自己的第一个数据块)。
 int UnixFs::fs_symlink(const char* target, const char* linkpath) {
     if (target == nullptr || *target == '\0') {
         return -1;
@@ -704,8 +738,8 @@ int UnixFs::fs_symlink(const char* target, const char* linkpath) {
         return -1;
     }
 
-    // A symlink is an inode whose data is the target path string. The target
-    // fits in one block (paths are short); cap to BLOCK_SIZE defensively.
+    // 软链接是一个 inode,数据就是目标路径字符串。路径很短,一个块装得下;
+    // 这里防御性地截到 BLOCK_SIZE。
     MemINode* new_ip = imng_.alloc(MODE_SYMLINK | DEFAULT_MODE, cur_uid_, cur_gid_);
     if (new_ip == nullptr) {
         imng_.put(parent_ip);
@@ -716,7 +750,7 @@ int UnixFs::fs_symlink(const char* target, const char* linkpath) {
     if (tlen > BLOCK_SIZE) tlen = BLOCK_SIZE;
     uint16_t phys = imng_.bmap_alloc(new_ip, 0);
     if (phys == INVALID_BLK) {
-        new_ip->di.di_nlink = 0;  // free the inode on put()
+        new_ip->di.di_nlink = 0;  // 置 0,让 put() 时回收这个 inode
         imng_.put(new_ip);
         imng_.put(parent_ip);
         return -1;
@@ -743,6 +777,7 @@ int UnixFs::fs_symlink(const char* target, const char* linkpath) {
     return 0;
 }
 
+// readlink:读出软链接指向的目标路径(不跟随,只取字符串)。非软链接返回失败。
 int UnixFs::fs_readlink(const char* path, std::string& out) {
     uint16_t ino = dmng_.namei(path, cwd_ino_, root_ino_);
     if (ino == INVALID_BLK) {
@@ -754,13 +789,14 @@ int UnixFs::fs_readlink(const char* path, std::string& out) {
     }
     if (!(ip->di.di_mode & MODE_SYMLINK)) {
         imng_.put(ip);
-        return -1;  // not a symlink
+        return -1;  // 不是软链接
     }
     out = read_link_target(ip);
     imng_.put(ip);
     return 0;
 }
 
+// 内部辅助:从软链接 inode 的首块把目标路径字符串读出来,按 di_size 截取。
 std::string UnixFs::read_link_target(MemINode* ip) {
     uint32_t sz = ip->di.di_size;
     if (sz == 0 || sz > BLOCK_SIZE) {
@@ -775,10 +811,11 @@ std::string UnixFs::read_link_target(MemINode* ip) {
     return std::string(reinterpret_cast<char*>(blk), sz);
 }
 
+// namei_follow:namei 解析后,若结果是软链接就接着解析它的目标,层层跟随。
+// 跳数上限把"成环 / 断链"变成一次干净的失败,而不是死循环。
 uint16_t UnixFs::namei_follow(const char* path) {
     uint16_t ino = dmng_.namei(path, cwd_ino_, root_ino_);
-    // Follow chained symlinks; the hop cap turns cycles and broken links into
-    // a clean failure instead of an infinite loop.
+    // 跟随链式软链接;跳数上限把成环和断链变成干净的失败,而非死循环。
     for (int hops = 0; ino != INVALID_BLK && hops < 16; ++hops) {
         MemINode* ip = imng_.get(ino);
         if (ip == nullptr) {
@@ -786,28 +823,29 @@ uint16_t UnixFs::namei_follow(const char* path) {
         }
         if (!(ip->di.di_mode & MODE_SYMLINK)) {
             imng_.put(ip);
-            return ino;  // resolved to a real file/dir
+            return ino;  // 解析到了真正的文件/目录
         }
         std::string target = read_link_target(ip);
         imng_.put(ip);
         if (target.empty()) {
             return INVALID_BLK;
         }
-        // Relative targets resolve from the current directory (good enough for
-        // the common "ln -s file link" / absolute-target cases).
+        // 相对目标从当前目录解析(够应付常见的 "ln -s file link" 和绝对目标)。
         ino = dmng_.namei(target.c_str(), cwd_ino_, root_ino_);
     }
-    // A real file/dir returns from inside the loop above. Reaching here means
-    // the target was unresolvable or we hit the hop cap (a cycle): fail.
+    // 真文件/目录会在上面循环里返回。走到这说明目标无法解析,或撞上跳数上限
+    //(成环):失败。
     return INVALID_BLK;
 }
 
-// ---- System info ----
+// ---- 系统信息 ----
 
+// type_name:引擎名,VFS 切换/标题栏用它区分 UNIX 还是 FAT16。
 std::string UnixFs::fs_type_name() const {
     return "UNIX";
 }
 
+// disk_usage:给磁盘用量面板算总数/已用数。已用 = 总数 - 空闲(空闲量超级块 O(1) 维护)。
 DiskUsage UnixFs::fs_disk_usage() const {
     DiskUsage du{};
     du.total_blocks = sb_.total_blocks();
@@ -817,11 +855,13 @@ DiskUsage UnixFs::fs_disk_usage() const {
     return du;
 }
 
+// block_map:给 TUI 的 F3 磁盘视图算每块的颜色状态(元数据/已用/空闲)。
+// 元数据区固定,数据区默认按已用,再用成组空闲链把真正空闲的块标回 FREE。
 void UnixFs::fs_block_map(std::vector<uint8_t>& out) {
     out.assign(TOTAL_BLK_NUM, BLK_USED);
-    // Boot block + superblock + the whole inode region are fixed metadata.
+    // 引导块 + 超级块 + 整个 inode 区都是固定元数据。
     for (uint32_t b = 0; b < DATA_START_BLK; ++b) out[b] = BLK_META;
-    // Data area defaults to USED; the group-linked chain tells us which are free.
+    // 数据区先默认 USED;成组空闲链告诉我们哪些是空闲的。
     std::vector<uint16_t> free_blocks;
     sb_.collect_free_blocks(free_blocks);
     for (uint16_t fb : free_blocks) {
@@ -830,16 +870,21 @@ void UnixFs::fs_block_map(std::vector<uint8_t>& out) {
     }
 }
 
+// set_user:VFS 在 login/su 后调进来,记下当前 uid/gid 供 check_access 用。
+// user_slot_ 固定 0:本引擎的打开文件表按单槽用,不区分多用户的槽位。
 void UnixFs::set_user(uint16_t uid, uint16_t gid) {
     cur_uid_ = uid;
     cur_gid_ = gid;
     user_slot_ = 0;
 }
 
+// set_disk_path:登记自动落盘的镜像路径,登记后每次写操作都会 sync 一次。
 void UnixFs::set_disk_path(const std::string& path) {
     disk_path_ = path;
 }
 
+// sync:把超级块刷回内存盘,再把整个内存盘存成宿主机文件,做到崩溃不丢数据。
+// 没登记 disk_path_ 就直接跳过(纯内存运行)。
 void UnixFs::sync() {
     if (disk_path_.empty()) {
         return;
@@ -848,6 +893,9 @@ void UnixFs::sync() {
     dev_.save_to_file(disk_path_.c_str());
 }
 
+// check_access:rwx 权限检查。root(uid==0)直接放行;否则按
+// owner(同 uid)→ 同组(同 gid)→ 其他人 的顺序选定一组 rwx 位,
+// 用这一组来判 required 里要的读/写权限。三组之间是"命中即用",不叠加。
 bool UnixFs::check_access(MemINode* ip, uint8_t required) {
     if (cur_uid_ == 0) return true;
 
@@ -855,19 +903,22 @@ bool UnixFs::check_access(MemINode* ip, uint8_t required) {
     uint16_t r_bit, w_bit;
 
     if (cur_uid_ == ip->di.di_uid) {
+        // 属主:用 PERM_U* 这组(owner 权限)
         r_bit = PERM_UR;
         w_bit = PERM_UW;
     } else if (cur_gid_ == ip->di.di_gid) {
+        // 同组:用 PERM_G* 这组(group 权限)
         r_bit = PERM_GR;
         w_bit = PERM_GW;
     } else {
+        // 其他人:用 PERM_O* 这组(other 权限)
         r_bit = PERM_OR;
         w_bit = PERM_OW;
     }
 
     if ((required & O_READ) && !(mode & r_bit)) return false;
-    // O_APPEND is a writing mode (fs_write honors it), so it needs the write
-    // bit just like O_WRITE — otherwise append silently bypasses permissions.
+    // O_APPEND 也是写模式(fs_write 认它),所以和 O_WRITE 一样要写权限位——
+    // 否则追加写会悄悄绕过权限检查。
     if ((required & (O_WRITE | O_APPEND)) && !(mode & w_bit)) return false;
     return true;
 }

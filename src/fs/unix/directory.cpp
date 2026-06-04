@@ -6,11 +6,16 @@
 
 namespace pfs {
 
+// 目录管理器:目录项的增删查 + 路径解析。
+// 目录在 UNIX 里就是一种内容为目录项数组的普通文件,
+// 所以读写目录内容同样要经过 inode 层的 bmap 寻址。
 DirectoryManager::DirectoryManager(BlockDevice& dev, InodeManager& imng) : dev_(dev), imng_(imng) {
 }
 
-// ---- Path helpers ----
+// ---- 路径辅助 ----
 
+// 把路径按 '/' 切段,空段(连续斜杠、首尾斜杠)自动跳过。
+// "/a/b/c" 和 "a/b/c" 切出来相同;绝对/相对的区别由调用方看 path[0] 判断。
 std::vector<std::string> DirectoryManager::split_path(const char* path) {
     std::vector<std::string> parts;
     std::string s(path);
@@ -30,8 +35,10 @@ std::vector<std::string> DirectoryManager::split_path(const char* path) {
     return parts;
 }
 
-// ---- Raw directory data I/O ----
+// ---- 目录数据读写 ----
 
+// 把目录文件的全部目录项读进内存:按逻辑块顺序 bmap 出物理块,
+// 逐块读出,按 16 字节一条切成目录项数组
 int DirectoryManager::read_dir_data(MemINode* dir_ip, std::vector<DiskDirEntry>& entries) {
     uint32_t size = dir_ip->di.di_size;
     uint32_t num_entries = size / DIR_ENTRY_SIZE;
@@ -57,6 +64,8 @@ int DirectoryManager::read_dir_data(MemINode* dir_ip, std::vector<DiskDirEntry>&
     return 0;
 }
 
+// 把整张目录项表写回目录文件,不够的块用 bmap_alloc 现场分配,
+// 最后更新目录文件大小并标脏
 int DirectoryManager::write_dir_data(MemINode* dir_ip, const std::vector<DiskDirEntry>& entries) {
     uint32_t total_size = entries.size() * DIR_ENTRY_SIZE;
     uint32_t blocks_needed = (total_size + BLOCK_SIZE - 1) / BLOCK_SIZE;
@@ -85,8 +94,9 @@ int DirectoryManager::write_dir_data(MemINode* dir_ip, const std::vector<DiskDir
     return 0;
 }
 
-// ---- Public API ----
+// ---- 对外接口 ----
 
+// 在一个目录里按名字查 inode 号。d_ino == 0 的槽是已删除的空项,要跳过
 uint16_t DirectoryManager::lookup(MemINode* dir_ip, const char* name) {
     std::vector<DiskDirEntry> entries;
     if (read_dir_data(dir_ip, entries) != 0) {
@@ -101,20 +111,22 @@ uint16_t DirectoryManager::lookup(MemINode* dir_ip, const char* name) {
     return INVALID_BLK;
 }
 
+// 往目录里挂一条 name → ino 的目录项,创建文件和硬链接(ln)走的是同一个函数
+// ——"链接"的本质就是多一条目录项指向同一个 inode
 int DirectoryManager::link(MemINode* dir_ip, const char* name, uint16_t ino) {
     std::vector<DiskDirEntry> entries;
     if (read_dir_data(dir_ip, entries) != 0) {
         return -1;
     }
 
-    // Check for duplicate name
+    // 查重名
     for (auto& e : entries) {
         if (e.d_ino != 0 && std::strncmp(e.d_name, name, MAX_FILENAME) == 0) {
             return -1;
         }
     }
 
-    // Find an empty slot (d_ino == 0)
+    // 优先复用空槽(d_ino == 0,删除留下的洞)
     for (auto& e : entries) {
         if (e.d_ino == 0) {
             std::memset(e.d_name, 0, MAX_FILENAME);
@@ -124,7 +136,7 @@ int DirectoryManager::link(MemINode* dir_ip, const char* name, uint16_t ino) {
         }
     }
 
-    // No empty slot — append a new entry
+    // 没有空槽,在表尾追加一条
     DiskDirEntry ne{};
     std::strncpy(ne.d_name, name, MAX_FILENAME);
     ne.d_ino = ino;
@@ -132,6 +144,8 @@ int DirectoryManager::link(MemINode* dir_ip, const char* name, uint16_t ino) {
     return write_dir_data(dir_ip, entries);
 }
 
+// 从目录里摘掉一条目录项(清成空槽)。注意这里只动目录:
+// inode 的 nlink 减一、以及是否真正回收,由上层 UnixFS 决定
 int DirectoryManager::unlink(MemINode* dir_ip, const char* name) {
     std::vector<DiskDirEntry> entries;
     if (read_dir_data(dir_ip, entries) != 0) {
@@ -148,10 +162,13 @@ int DirectoryManager::unlink(MemINode* dir_ip, const char* name) {
     return -1;
 }
 
+// 给 ls/tree 用的只读接口,原样返回全部目录项
 int DirectoryManager::read_entries(MemINode* dir_ip, std::vector<DiskDirEntry>& out) {
     return read_dir_data(dir_ip, out);
 }
 
+// 新目录"开张":写入 . 和 .. 两条初始目录项
+// (. 指自己,.. 指父目录,根目录的 .. 指向它自己)
 int DirectoryManager::init_dir(MemINode* dir_ip, uint16_t self_ino, uint16_t parent_ino) {
     std::vector<DiskDirEntry> entries(2);
 
@@ -166,6 +183,7 @@ int DirectoryManager::init_dir(MemINode* dir_ip, uint16_t self_ino, uint16_t par
     return write_dir_data(dir_ip, entries);
 }
 
+// 判断目录是否为空(除 . 和 .. 外没有有效项),rmdir 前的必查项
 bool DirectoryManager::is_empty(MemINode* dir_ip) {
     std::vector<DiskDirEntry> entries;
     if (read_dir_data(dir_ip, entries) != 0) {
@@ -180,15 +198,19 @@ bool DirectoryManager::is_empty(MemINode* dir_ip) {
     return true;
 }
 
+// namei:路径字符串 → inode 号,整个文件系统"按名字找文件"的总入口
 uint16_t DirectoryManager::namei(const char* path, uint16_t cwd_ino, uint16_t root_ino) {
     auto parts = split_path(path);
     if (parts.empty()) {
+        // 路径只有斜杠("/" 或 "//"):绝对路径就是根,相对路径就是当前目录
         return (path[0] == '/') ? root_ino : cwd_ino;
     }
 
-    // Determine starting point: absolute path starts from root
+    // 绝对路径从根出发,相对路径从当前目录出发
     uint16_t cur_ino = (path[0] == '/') ? root_ino : cwd_ino;
 
+    // 逐段解析:get 当前 inode → 确认是目录 → lookup 下一段 → put 归还引用
+    // 再前进。get/put 严格配对,引用计数才不会泄漏。
     for (auto& name : parts) {
         MemINode* ip = imng_.get(cur_ino);
         if (ip == nullptr || !(ip->di.di_mode & MODE_DIR)) {
@@ -205,6 +227,9 @@ uint16_t DirectoryManager::namei(const char* path, uint16_t cwd_ino, uint16_t ro
     return cur_ino;
 }
 
+// 和 namei 走法相同,但停在倒数第二级,最后一段名字经 basename 带回。
+// create/delete/link 改的是父目录的目录项,所以要的是父目录而不是目标本身
+// (目标此时可能还不存在)。
 uint16_t DirectoryManager::namei_parent(const char* path, uint16_t cwd_ino, uint16_t root_ino,
                                         std::string& basename) {
     auto parts = split_path(path);
@@ -216,11 +241,11 @@ uint16_t DirectoryManager::namei_parent(const char* path, uint16_t cwd_ino, uint
     parts.pop_back();
 
     if (parts.empty()) {
-        // Path is just a filename — parent is cwd (or root if absolute)
+        // 路径只剩文件名一段:父目录就是当前目录(绝对路径则是根)
         return (path[0] == '/') ? root_ino : cwd_ino;
     }
 
-    // Resolve the parent path
+    // 逐段解析到父目录为止,走法和 namei 完全一致
     uint16_t cur_ino = (path[0] == '/') ? root_ino : cwd_ino;
     for (auto& name : parts) {
         MemINode* ip = imng_.get(cur_ino);

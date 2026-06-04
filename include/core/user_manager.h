@@ -13,6 +13,7 @@ constexpr uint8_t ACCESS_EXEC = 4;
 
 constexpr uint32_t PWDSIZ = 12;
 
+// 一条用户记录:uid/gid + 用户名 + 密码(明文,够课设演示用)。
 struct UserRecord {
     uint16_t uid;
     uint16_t gid;
@@ -20,62 +21,62 @@ struct UserRecord {
     char password[PWDSIZ];
 };
 
+// 用户管理器:登录/登出、useradd/passwd/su,以及 rwx 权限检查。
+// 始终至少含一个 root,用户表可独立持久化到宿主机文件。
 class UserManager {
    public:
     UserManager();
 
-    // Returns user_id on success, -1 on failure. Sets current user.
+    // 成功返回 user_id,失败返回 -1,并设置当前用户。
     int login(const char* username, const char* password);
 
-    // Log in as root (uid 0) without a password. Used at startup so a session
-    // begins as root — matching the engine's default uid=0 context — instead of
-    // the inconsistent "logged out but still treated as root" state. Returns 0
-    // on success, -1 if no root account exists. Survives a changed root pw.
+    // 免密以 root(uid 0)登录。启动时用,让会话一开始就是 root——和引擎
+    // 默认 uid=0 的上下文对齐——而非"已登出却仍按 root 处理"的不一致状态。
+    // 成功返回 0,无 root 账号返回 -1。即使 root 密码被改过也照样能进。
     int login_root();
 
-    // Logs out current user. Returns 0 on success, -1 if not logged in.
+    // 登出当前用户。成功返回 0,未登录返回 -1。
     int logout();
 
-    // Create a new user (root only). Returns 0 on success, -1 otherwise.
+    // 新建用户(仅 root 可用)。成功返回 0,否则返回 -1。
     int add_user(const char* username, const char* password, uint16_t uid, uint16_t gid);
 
-    // Change password for the given user (root may change any user's pw).
+    // 修改指定用户的密码(root 可改任何用户的密码)。
     int change_password(uint16_t user_id, const char* old_pw, const char* new_pw);
 
-    // Check whether user_id has `access` permission (ACCESS_READ/WRITE/EXEC)
-    // for a file with the given owner, group, and mode bits.
+    // 检查 user_id 对给定 owner/group/mode 的文件是否具备 `access`
+    // 权限(ACCESS_READ/WRITE/EXEC)。
     bool check_access(uint16_t user_id, uint16_t file_uid, uint16_t file_gid, uint16_t file_mode,
                       uint8_t access) const;
 
-    // Current session
+    // 当前会话信息
     uint16_t current_uid() const;
     uint16_t current_gid() const;
     std::string current_username() const;
     bool is_logged_in() const;
 
-    // Switch user. Root can su without password; others need target's pw.
+    // 切换用户。root 免密码,其他人需提供目标用户的密码。
     int su(uint16_t uid, const char* password);
 
-    // Lookup
+    // 查找
     const UserRecord* find_user(uint16_t uid) const;
     const UserRecord* find_user(const char* username) const;
 
-    // --- Persistence ---
-    // Dump the user table to a host file (binary). Returns 0 on success.
+    // --- 持久化 ---
+    // 把用户表写成宿主机二进制文件。成功返回 0。
     int save_to_file(const char* path) const;
-    // Restore the user table from a host file. Returns 0 on success; on
-    // failure the current table is left unchanged. Leaves the session
-    // logged out (current user must log in again).
+    // 从宿主机文件恢复用户表。成功返回 0;失败则保持现有表不变。
+    // 恢复后会话处于登出态(需重新登录)。
     int load_from_file(const char* path);
-    // Enable auto-save: once set, a successful add_user/change_password
-    // flushes the table to `path`, mirroring the FS engines' auto-sync.
+    // 开启自动保存:设置后,add_user/change_password 成功即把表落盘到
+    // `path`,与 FS 引擎的自动同步保持一致。
     void set_persist_path(const std::string& path);
 
    private:
     UserRecord users_[MAX_USER];
     int user_count_;
-    int current_index_;         // -1 when no user logged in
-    std::string persist_path_;  // empty = auto-save disabled
+    int current_index_;         // -1 表示无人登录
+    std::string persist_path_;  // 为空表示关闭自动保存
 };
 
 }  // namespace pfs

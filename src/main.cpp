@@ -23,20 +23,18 @@ using namespace pfs;
 
 static const char* UNIX_DISK = "pfs_unix.img";
 static const char* FAT16_DISK = "pfs_fat16.img";
-// User accounts live outside the FS image so a single table is shared across
-// both engines and both (CLI / TUI) modes.
+// 用户账户存在 FS 镜像之外,这样一张表能被两个引擎、两种模式(CLI / TUI)共用。
 static const char* USERS_FILE = "pfs_users.dat";
 
-// ---- CLI input + Ctrl+C handling ----
+// ---- CLI 输入 + Ctrl+C 处理 ----
 //
-// Ctrl+C should cancel the current input line and re-prompt (like a shell),
-// not kill the program. We install a SIGINT handler (no SA_RESTART) so a
-// blocked read(2) returns EINTR; the flag below tells the input layer it was
-// an interrupt rather than EOF/error. All CLI input goes through one buffered
-// reader (read_char) — both the prompt loop and the `more` pager — so there is
-// a single input stream with deterministic interrupt handling and no stdio
-// buffering surprises.
+// Ctrl+C 应该像 shell 那样取消当前输入行并重新出提示符,而不是杀掉程序。
+// 我们装一个 SIGINT 处理函数(不带 SA_RESTART),让阻塞中的 read(2) 返回 EINTR;
+// 下面这个标志告诉输入层这是一次中断,而不是 EOF/错误。所有 CLI 输入都走同一个
+// 带缓冲的读取器(read_char)——提示符循环和 `more` 分页器都走它——于是只有一条
+// 输入流,中断处理是确定的,也不会被 stdio 缓冲坑到。
 static volatile sig_atomic_t g_sigint = 0;
+// SIGINT 信号处理函数:只置标志,真正的取消逻辑放在输入层判断
 static void handle_sigint(int) {
     g_sigint = 1;
 }
@@ -45,13 +43,13 @@ static unsigned char g_inbuf[4096];
 static size_t g_inbuf_len = 0;
 static size_t g_inbuf_pos = 0;
 
-// Read one byte of CLI input. Returns 1 and sets *c on success, 0 on EOF,
-// -1 when interrupted by a signal (check g_sigint to tell Ctrl+C apart).
+// 读一个字节的 CLI 输入。成功返回 1 并写 *c,EOF 返回 0,
+// 被信号打断返回 -1(用 g_sigint 区分是不是 Ctrl+C)。
 static int read_char(char* c) {
     if (g_inbuf_pos >= g_inbuf_len) {
         ssize_t n = read(STDIN_FILENO, g_inbuf, sizeof(g_inbuf));
-        if (n < 0) return -1;  // EINTR or hard error
-        if (n == 0) return 0;  // EOF (Ctrl+D / closed pipe)
+        if (n < 0) return -1;  // EINTR 或硬错误
+        if (n == 0) return 0;  // EOF(Ctrl+D / 管道关闭)
         g_inbuf_len = static_cast<size_t>(n);
         g_inbuf_pos = 0;
     }
@@ -61,7 +59,7 @@ static int read_char(char* c) {
 
 enum class LineResult { Ok, Eof, Canceled };
 
-// Read a full line (newline stripped) via read_char. Canceled => Ctrl+C.
+// 用 read_char 读一整行(去掉换行符)。Canceled 表示按了 Ctrl+C。
 static LineResult read_line(std::string& out) {
     out.clear();
     while (true) {
@@ -69,9 +67,9 @@ static LineResult read_line(std::string& out) {
         int r = read_char(&c);
         if (r == 1) {
             if (c == '\n') return LineResult::Ok;
-            if (c != '\r') out.push_back(c);  // tolerate CRLF input
+            if (c != '\r') out.push_back(c);  // 容忍 CRLF 输入
         } else if (r == 0) {
-            // EOF: deliver a trailing partial line once, then signal EOF.
+            // EOF:先把末尾这半行交出去一次,然后才报 EOF。
             return out.empty() ? LineResult::Eof : LineResult::Ok;
         } else {  // r < 0
             if (errno == EINTR) {
@@ -79,25 +77,23 @@ static LineResult read_line(std::string& out) {
                     g_sigint = 0;
                     return LineResult::Canceled;
                 }
-                continue;  // some other signal: keep reading
+                continue;  // 其它信号:继续读
             }
             return LineResult::Eof;
         }
     }
 }
 
-// Explain a failed open: fs_open returns -1 for both "missing" and "denied".
-// If the path still resolves via stat, it exists and the open was blocked by a
-// permission check; otherwise it really isn't there. Lets commands report
-// "permission denied" instead of a misleading "file not found".
+// 给"打开失败"找个像样的解释:fs_open 对"不存在"和"被拒绝"都返回 -1。
+// 如果用 stat 还能解析出这个路径,说明它存在,失败是被权限检查挡住的;
+// 否则就是真不存在。这样命令能报"permission denied"而不是误导人的"file not found"。
 static std::string open_error(IFileSystem& fs, const std::string& path) {
     FileStat st{};
     if (fs.fs_stat(path.c_str(), st) != 0) return "no such file";
-    // A directory can't be opened as a file (fs_open rejects it).
+    // 目录不能当文件打开(fs_open 会拒绝)。
     if (st.type == TYPE_DIR) return "is a directory";
-    // The path exists. If it is a symlink, the open most likely failed because
-    // its target is unresolvable — distinguish that from a real permission
-    // denial (fs_stat is lstat-style, so statting the target tells us).
+    // 路径存在。如果是符号链接,失败多半是因为目标解析不出来——
+    // 跟真正的权限拒绝区分开(fs_stat 是 lstat 语义,所以去 stat 一下目标就知道了)。
     if (st.type == TYPE_SYMLINK) {
         std::string target;
         FileStat tst{};
@@ -108,30 +104,29 @@ static std::string open_error(IFileSystem& fs, const std::string& path) {
     return "permission denied";
 }
 
-// Join a directory path and an entry name. "" means the cwd (so the name is
-// used bare, resolving against the cwd).
+// 把目录路径和一个目录项名拼起来。base 为 "" 表示当前目录(直接用裸名,相对 cwd 解析)。
 static std::string join_path(const std::string& base, const char* name) {
     if (base.empty()) return std::string(name);
     if (base == "/") return "/" + std::string(name);
     return base + "/" + std::string(name);
 }
 
-// Append one `ll` detail line for an entry to `out`:
-//   <type+rwx>  <nlink>  <owner>  <size>  <mtime>  <display>[/ | @ -> target]
-// `full` is the path used for stat/readlink; `display` is the text shown.
+// 给 `ll` 往 out 里追加一个条目的详细行:
+//   <类型+rwx>  <nlink>  <owner>  <size>  <mtime>  <display>[/ | @ -> target]
+// full 是拿去 stat/readlink 的路径;display 是实际显示的文本。
 static void append_ll_line(IFileSystem& fs, UserManager& um, const std::string& full,
                            const std::string& display, uint8_t type, std::string& out) {
     FileStat st{};
     fs.fs_stat(full.c_str(), st);
 
-    // Permission column: type char + rwx triplets, e.g. drwxr-xr-x.
+    // 权限列:类型字符 + rwx 三组,例如 drwxr-xr-x。
     char perm[11];
     perm[0] = (type == TYPE_DIR) ? 'd' : (type == TYPE_SYMLINK) ? 'l' : '-';
     const char* rwx = "rwxrwxrwx";
     for (int i = 0; i < 9; ++i) perm[i + 1] = (st.mode & (1 << (8 - i))) ? rwx[i] : '-';
     perm[10] = '\0';
 
-    // Owner: username if known, else the raw uid.
+    // 属主:认识 uid 就显示用户名,否则显示裸 uid。
     char owner[16];
     const UserRecord* u = um.find_user(st.uid);
     if (u != nullptr)
@@ -139,13 +134,13 @@ static void append_ll_line(IFileSystem& fs, UserManager& um, const std::string& 
     else
         std::snprintf(owner, sizeof(owner), "%u", st.uid);
 
-    // Modification time as "MM-DD HH:MM".
+    // 修改时间,格式 "MM-DD HH:MM"。
     char when[16] = "-";
     std::time_t t = static_cast<std::time_t>(st.mtime);
     std::tm* lt = std::localtime(&t);
     if (lt) std::strftime(when, sizeof(when), "%m-%d %H:%M", lt);
 
-    // Name suffix: "/" for dirs, "@ -> target" for symlinks.
+    // 名字后缀:目录加 "/",符号链接加 "@ -> 目标"。
     std::string suffix;
     if (type == TYPE_DIR) {
         suffix = "/";
@@ -154,8 +149,7 @@ static void append_ll_line(IFileSystem& fs, UserManager& um, const std::string& 
         suffix = (fs.fs_readlink(full.c_str(), tgt) == 0) ? "@ -> " + tgt : "@";
     }
 
-    // Fixed-width prefix via snprintf; append name+suffix as a string so a long
-    // symlink target is never truncated.
+    // 定宽前缀用 snprintf 拼;名字+后缀以字符串追加,这样长的符号链接目标不会被截断。
     char head[64];
     std::snprintf(head, sizeof(head), "%s %2u %-8s %6u  %s  ", perm, st.nlink, owner, st.size,
                   when);
@@ -165,7 +159,10 @@ static void append_ll_line(IFileSystem& fs, UserManager& um, const std::string& 
     out += "\n";
 }
 
+// 把所有 shell 命令的 handler 注册进命令表。每个 handler 是个 lambda,签名统一为
+// (文件系统, 用户管理, 参数表, 输出串) -> 返回码(0 成功, 非 0 失败)。
 static void register_commands(CommandRegistry& reg) {
+    // login <user> <pw>:校验账号密码并登录,成功后欢迎语带上 uid。
     reg.register_cmd(
         "login",
         [](IFileSystem&, UserManager& um, const std::vector<std::string>& args,
@@ -184,6 +181,7 @@ static void register_commands(CommandRegistry& reg) {
         },
         "login <user> <pw> — log in");
 
+    // logout:注销当前用户。已是未登录态则报错。
     reg.register_cmd(
         "logout",
         [](IFileSystem&, UserManager& um, const std::vector<std::string>&,
@@ -198,6 +196,7 @@ static void register_commands(CommandRegistry& reg) {
         },
         "logout — log out");
 
+    // useradd <user> <pw> <uid> <gid>:仅 root 可建用户,顺带在 /home 下建用户主目录。
     reg.register_cmd(
         "useradd",
         [](IFileSystem& fs, UserManager& um, const std::vector<std::string>& args,
@@ -213,19 +212,19 @@ static void register_commands(CommandRegistry& reg) {
                 out = "useradd: failed (need root, unique name, and free slot)";
                 return -1;
             }
-            // Create home directory for the new user. /home stays root-owned;
-            // the per-user dir is created as the new user so they own it (and
-            // can actually write in it after logging in).
+            // 给新用户建主目录。/home 仍归 root;用户自己那一级以新用户身份创建,
+            // 这样它归用户所有(登录后才能真正在里面写东西)。
             std::string home = "/home/" + std::string(args[0]);
             fs.fs_mkdir("/home");
             fs.set_user(uid, gid);
             fs.fs_mkdir(home.c_str());
-            fs.set_user(um.current_uid(), um.current_gid());  // restore to root
+            fs.set_user(um.current_uid(), um.current_gid());  // 恢复成 root
             out = "User " + std::string(args[0]) + " created.";
             return 0;
         },
         "useradd <user> <pw> <uid> <gid> — create user (root only)");
 
+    // passwd <old> <new>:改当前用户密码,要先验旧密码。
     reg.register_cmd(
         "passwd",
         [](IFileSystem&, UserManager& um, const std::vector<std::string>& args,
@@ -244,6 +243,7 @@ static void register_commands(CommandRegistry& reg) {
         },
         "passwd <old> <new> — change password");
 
+    // format:格式化虚拟磁盘,重建整个文件卷(超级块/空闲链/根目录)。
     reg.register_cmd(
         "format",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>&,
@@ -254,6 +254,7 @@ static void register_commands(CommandRegistry& reg) {
         },
         "format — format the virtual disk");
 
+    // mkdir [-p] <path>:建目录。带 -p 时逐级建,中间目录已存在不报错。
     reg.register_cmd(
         "mkdir",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
@@ -275,7 +276,7 @@ static void register_commands(CommandRegistry& reg) {
                 if (ret != 0) out = "mkdir: failed";
                 return ret;
             }
-            // -p: create each level
+            // -p:逐级创建
             std::string cur;
             size_t pos = 0;
             if (path[0] == '/') {
@@ -292,7 +293,7 @@ static void register_commands(CommandRegistry& reg) {
                 }
                 pos = slash + 1;
             }
-            // Final check: does the full path exist now?
+            // 最后兜底检查:整条路径现在到底存不存在?
             FileStat st;
             if (fs.fs_stat(path.c_str(), st) == 0) return 0;
             out = "mkdir: failed";
@@ -300,6 +301,7 @@ static void register_commands(CommandRegistry& reg) {
         },
         "mkdir [-p] <path> — create directory");
 
+    // su <uid|name> [pw]:切换用户。目标可以写用户名或数字 uid;切到他人需密码(root 免)。
     reg.register_cmd(
         "su",
         [](IFileSystem&, UserManager& um, const std::vector<std::string>& args,
@@ -308,11 +310,9 @@ static void register_commands(CommandRegistry& reg) {
                 out = "Usage: su <uid|username> [password]";
                 return -1;
             }
-            // Resolve the target: try by name first, then as a numeric uid.
-            // Only attempt the uid parse when the arg is actually all-digits —
-            // otherwise std::stoi on a bad name (e.g. "su alice") would throw,
-            // surfacing a confusing "invalid numeric argument" instead of the
-            // real problem.
+            // 解析目标:先按名字找,找不到再当数字 uid。
+            // 只有参数全是数字才尝试解析 uid——否则对一个坏名字(比如 "su alice")
+            // 调 std::stoi 会抛异常,冒出个莫名其妙的"invalid numeric argument"盖住真正的问题。
             const UserRecord* u = um.find_user(args[0].c_str());
             if (u == nullptr) {
                 const std::string& who = args[0];
@@ -337,6 +337,7 @@ static void register_commands(CommandRegistry& reg) {
         },
         "su <uid|name> [pw] — switch user");
 
+    // more <file>:分页查看文件内容。读完整文件后加 PAGER_PREFIX 前缀,交给调用方的分页器。
     reg.register_cmd(
         "more",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
@@ -357,13 +358,13 @@ static void register_commands(CommandRegistry& reg) {
                 out = "more: read error";
                 return -1;
             }
-            // Hand the content to the caller's pager (TUI full-screen / CLI
-            // --More--) via the prefix, so it is shown one screen at a time.
+            // 内容前面加前缀交给调用方的分页器(TUI 全屏 / CLI --More--),让它一屏一屏地显示。
             out = std::string(PAGER_PREFIX) + std::string(buf.data(), n);
             return 0;
         },
         "more <file> — view file content one page at a time");
 
+    // find <path> <name>:从 path 起递归找名字含 name 子串的项,逐条输出全路径。
     reg.register_cmd(
         "find",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
@@ -375,10 +376,8 @@ static void register_commands(CommandRegistry& reg) {
             const char* start = args[0].c_str();
             const std::string& pattern = args[1];
             out.clear();
-            // Recursive search. The depth cap is defense-in-depth: a healthy
-            // tree is never this deep, but a directory corrupted by an earlier
-            // bug (or a future one) could otherwise drive infinite recursion and
-            // crash the program — bound it instead.
+            // 递归搜索。深度上限是纵深防御:正常树绝不会这么深,但若某个目录被早先(或将来)
+            // 的 bug 写坏了,可能驱动无限递归把程序搞崩——干脆给它封顶。
             std::function<void(const std::string&, int)> search = [&](const std::string& dir,
                                                                       int depth) {
                 if (depth > 64) return;
@@ -400,6 +399,7 @@ static void register_commands(CommandRegistry& reg) {
         },
         "find <path> <name> — search files by name");
 
+    // rmdir <path>...:删空目录,可一次删多个。非空或不存在则逐个报错但继续。
     reg.register_cmd(
         "rmdir",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
@@ -420,6 +420,7 @@ static void register_commands(CommandRegistry& reg) {
         },
         "rmdir <path>... — remove empty directories");
 
+    // cd [path]:切换工作目录。无参回根,开头 ~ 展开成 /home/当前用户。
     reg.register_cmd(
         "cd",
         [](IFileSystem& fs, UserManager& um, const std::vector<std::string>& args,
@@ -434,6 +435,7 @@ static void register_commands(CommandRegistry& reg) {
         },
         "cd [path] — change directory (~ = home)");
 
+    // pwd:打印当前工作目录的绝对路径。
     reg.register_cmd(
         "pwd",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>&,
@@ -443,11 +445,12 @@ static void register_commands(CommandRegistry& reg) {
         },
         "pwd — print working directory");
 
+    // ls [path]...:列目录/文件,按类型上色。文件参数先列、目录参数后列,多目标时加表头。
     reg.register_cmd(
         "ls",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
            std::string& out) -> int {
-            // Append a name colored by type (dir=green/, symlink=cyan@, plain).
+            // 按类型给名字上色追加(目录=绿色/,符号链接=青色@,普通文件原样)。
             auto paint = [](std::string& dst, const std::string& name, uint8_t type) {
                 if (type == TYPE_DIR) {
                     dst += "\033[32m";
@@ -466,10 +469,10 @@ static void register_commands(CommandRegistry& reg) {
             int rc = 0;
             bool multi = args.size() > 1;
             std::vector<std::string> targets = args;
-            if (targets.empty()) targets.push_back("");  // cwd
+            if (targets.empty()) targets.push_back("");  // 当前目录
 
-            std::string files;  // file/symlink args, listed together first
-            std::string dirs;   // directory args, each with a header when multi
+            std::string files;  // 文件/符号链接参数,先一起列出来
+            std::string dirs;   // 目录参数,多目标时各带一个表头
             for (const std::string& tp : targets) {
                 FileStat st{};
                 if (!tp.empty() && fs.fs_stat(tp.c_str(), st) != 0) {
@@ -491,7 +494,7 @@ static void register_commands(CommandRegistry& reg) {
                     if (multi) dirs += (tp.empty() ? "." : tp) + ":\n";
                     dirs += body + "\n";
                 } else {
-                    paint(files, tp, st.type);  // a matched file (e.g. ls *.txt)
+                    paint(files, tp, st.type);  // 命中的文件(例如 ls *.txt)
                 }
             }
 
@@ -507,6 +510,7 @@ static void register_commands(CommandRegistry& reg) {
         },
         "ls [path]... — list directories / files");
 
+    // ll [path]...:详细列表,每行带权限/链接数/属主/大小/修改时间,见 append_ll_line。
     reg.register_cmd(
         "ll",
         [](IFileSystem& fs, UserManager& um, const std::vector<std::string>& args,
@@ -515,7 +519,7 @@ static void register_commands(CommandRegistry& reg) {
             int rc = 0;
             bool multi = args.size() > 1;
             std::vector<std::string> targets = args;
-            if (targets.empty()) targets.push_back("");  // cwd
+            if (targets.empty()) targets.push_back("");  // 当前目录
 
             for (const std::string& tp : targets) {
                 FileStat st{};
@@ -533,12 +537,11 @@ static void register_commands(CommandRegistry& reg) {
                         continue;
                     }
                     if (multi) out += (tp.empty() ? "." : tp) + ":\n";
-                    // Stat each entry by its full path (bare e.name would resolve
-                    // against the cwd, wrong when listing another directory).
+                    // 每个条目用完整路径去 stat(裸 e.name 会相对 cwd 解析,列别的目录时就错了)。
                     for (auto& e : entries)
                         append_ll_line(fs, um, join_path(tp, e.name), e.name, e.type, out);
                 } else {
-                    // A file/symlink argument (e.g. from "ll *.txt").
+                    // 文件/符号链接参数(例如来自 "ll *.txt")。
                     append_ll_line(fs, um, tp, tp, st.type, out);
                 }
             }
@@ -548,6 +551,7 @@ static void register_commands(CommandRegistry& reg) {
         },
         "ll [path]... — detailed listing (perm/links/owner/size/mtime)");
 
+    // touch <file>...:创建文件,可一次建多个。
     reg.register_cmd(
         "touch",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
@@ -556,8 +560,7 @@ static void register_commands(CommandRegistry& reg) {
                 out = "Usage: touch <file>...";
                 return -1;
             }
-            // Create each file; report per-file failures but keep going, like
-            // the other multi-target commands (rm/rmdir/ls/cat).
+            // 逐个创建;像其它多目标命令(rm/rmdir/ls/cat)一样,单个失败照报但继续。
             int rc = 0;
             for (const auto& f : args) {
                 if (fs.fs_create(f.c_str(), DEFAULT_MODE) != 0) {
@@ -570,6 +573,7 @@ static void register_commands(CommandRegistry& reg) {
         },
         "touch <file>... — create file(s)");
 
+    // rm [-r] <path>...:删文件;带 -r/-rf 时递归删目录。可一次删多个。
     reg.register_cmd(
         "rm",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
@@ -586,8 +590,7 @@ static void register_commands(CommandRegistry& reg) {
                 out = "Usage: rm [-r] <path>...";
                 return -1;
             }
-            // Remove every target (so a glob like "rm *.log" deletes them all);
-            // report each failure but keep going.
+            // 把每个目标都删掉(这样像 "rm *.log" 的通配能一次删完);单个失败照报但继续。
             int rc = 0;
             for (auto& t : targets) {
                 int ret = recursive ? fs.fs_delete_recursive(t.c_str()) : fs.fs_delete(t.c_str());
@@ -601,6 +604,7 @@ static void register_commands(CommandRegistry& reg) {
         },
         "rm [-r] <path>... — delete files or directories");
 
+    // open <file> [r|w|rw|a]:打开文件返回 fd。模式默认只读,w 会截断,a 追加,rw 读写。
     reg.register_cmd(
         "open",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
@@ -612,7 +616,7 @@ static void register_commands(CommandRegistry& reg) {
             int flags = O_READ;
             if (args.size() > 1) {
                 if (args[1] == "w")
-                    flags = O_WRITE | O_TRUNC;  // `w` discards old contents (fopen "w")
+                    flags = O_WRITE | O_TRUNC;  // `w` 丢掉旧内容(对应 fopen 的 "w")
                 else if (args[1] == "rw")
                     flags = O_READ | O_WRITE;
                 else if (args[1] == "a")
@@ -628,6 +632,7 @@ static void register_commands(CommandRegistry& reg) {
         },
         "open <file> [r|w|rw|a] — open file");
 
+    // close <fd>:关闭文件描述符,从打开文件表移除。
     reg.register_cmd(
         "close",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
@@ -643,6 +648,7 @@ static void register_commands(CommandRegistry& reg) {
         },
         "close <fd> — close file");
 
+    // read <fd> [len]:从 fd 当前偏移读至多 len 字节(默认 4096)并显示。
     reg.register_cmd(
         "read",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
@@ -654,9 +660,8 @@ static void register_commands(CommandRegistry& reg) {
             int fd = std::stoi(args[0]);
             size_t len = 4096;
             if (args.size() > 1) {
-                // Reject negative/empty before std::stoul, which would silently
-                // wrap "-5" into a near-ULONG_MAX value and blow up the buffer
-                // allocation below with a confusing length_error.
+                // 在 std::stoul 之前先挡掉负数/空串——否则 "-5" 会被悄悄绕成接近 ULONG_MAX 的值,
+                // 下面分配缓冲区时炸出个莫名其妙的 length_error。
                 const std::string& len_arg = args[1];
                 if (len_arg.empty() || len_arg[0] == '-') {
                     out = "read: invalid length";
@@ -664,8 +669,8 @@ static void register_commands(CommandRegistry& reg) {
                 }
                 len = std::stoul(len_arg);
             }
-            // Cap the request so a typo can't trigger a multi-gigabyte alloc.
-            // The whole data region is far smaller than this anyway.
+            // 给请求长度封顶,免得手滑打错触发好几个 GB 的分配。
+            // 反正整个数据区也远比这个小。
             constexpr size_t kMaxReadLen = 1u << 20;  // 1 MiB
             if (len > kMaxReadLen) len = kMaxReadLen;
             std::vector<char> buf(len + 1, 0);
@@ -679,6 +684,7 @@ static void register_commands(CommandRegistry& reg) {
         },
         "read <fd> [len] — read from file");
 
+    // write <fd> <text>:把 text(多个词用空格拼)写到 fd 当前偏移,返回写入字节数。
     reg.register_cmd(
         "write",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
@@ -703,6 +709,7 @@ static void register_commands(CommandRegistry& reg) {
         },
         "write <fd> <text> — write to file");
 
+    // cat <file>...:依次读出并拼接多个文件的全部内容。单个失败照报但继续。
     reg.register_cmd(
         "cat",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
@@ -734,6 +741,7 @@ static void register_commands(CommandRegistry& reg) {
         },
         "cat <file>... — display file content");
 
+    // stat <path>...:打印文件/目录/符号链接的详细元信息(类型/权限/uid/gid/大小/链接数)。
     reg.register_cmd(
         "stat",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
@@ -772,6 +780,7 @@ static void register_commands(CommandRegistry& reg) {
         },
         "stat <path>... — file/directory info");
 
+    // chmod <mode> <path>...:改权限,mode 按八进制解析(如 755),可一次改多个。
     reg.register_cmd(
         "chmod",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
@@ -793,6 +802,7 @@ static void register_commands(CommandRegistry& reg) {
         },
         "chmod <mode> <path>... — change permissions");
 
+    // ln [-s] <target> <link>:默认建硬链接;带 -s 建软(符号)链接。
     reg.register_cmd(
         "ln",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
@@ -819,6 +829,7 @@ static void register_commands(CommandRegistry& reg) {
         },
         "ln [-s] <target> <link> — hard link, or -s for soft (symbolic) link");
 
+    // readlink <path>:打印一个符号链接指向的目标路径,不是软链接则报错。
     reg.register_cmd(
         "readlink",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
@@ -837,6 +848,7 @@ static void register_commands(CommandRegistry& reg) {
         },
         "readlink <path> — print a symlink's target");
 
+    // cp <src> <dst>:复制文件。建好 dst 后边读边写,读完两端都关闭。
     reg.register_cmd(
         "cp",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
@@ -851,8 +863,8 @@ static void register_commands(CommandRegistry& reg) {
                 return -1;
             }
             fs.fs_create(args[1].c_str(), DEFAULT_MODE);
-            // O_TRUNC so copying onto an existing (longer) file leaves no tail.
-            // (fs_open refuses a directory dst, so `cp f dir` errors, not corrupt.)
+            // 用 O_TRUNC,这样覆盖一个更长的旧文件时不会留尾巴。
+            // (fs_open 拒绝目录作 dst,所以 `cp f dir` 报错而非写坏。)
             int dst_fd = fs.fs_open(args[1].c_str(), O_WRITE | O_TRUNC);
             if (dst_fd < 0) {
                 fs.fs_close(src_fd);
@@ -871,6 +883,7 @@ static void register_commands(CommandRegistry& reg) {
         },
         "cp <src> <dst> — copy file");
 
+    // disk:显示磁盘占用,块和 inode 的已用/总数,以及当前引擎名。
     reg.register_cmd(
         "disk",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>&,
@@ -885,6 +898,7 @@ static void register_commands(CommandRegistry& reg) {
         },
         "disk — show disk usage");
 
+    // tree [-d N] [path]:树状打印目录结构,-d 限定最大深度(默认 6),跳过 . 和 ..。
     reg.register_cmd(
         "tree",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
@@ -904,7 +918,7 @@ static void register_commands(CommandRegistry& reg) {
                 out = "tree: cannot list";
                 return -1;
             }
-            // Build tree recursively
+            // 递归构建树形输出
             std::function<void(const std::vector<DirEntry>&, const std::string&, int,
                                const std::string&)>
                 walk = [&](const std::vector<DirEntry>& entries, const std::string& base, int depth,
@@ -936,6 +950,7 @@ static void register_commands(CommandRegistry& reg) {
         },
         "tree [-d N] [path] — show directory tree");
 
+    // mv <src> <dst>:移动/重命名文件,实现是"复制内容到 dst 再删 src"。暂不支持目录。
     reg.register_cmd(
         "mv",
         [](IFileSystem& fs, UserManager&, const std::vector<std::string>& args,
@@ -953,7 +968,7 @@ static void register_commands(CommandRegistry& reg) {
                 out = "mv: directory move not supported (use cp+rm)";
                 return -1;
             }
-            // Copy file content
+            // 复制文件内容
             int sfd = fs.fs_open(args[0].c_str(), O_READ);
             if (sfd < 0) {
                 out = "mv: cannot read source";
@@ -979,6 +994,7 @@ static void register_commands(CommandRegistry& reg) {
         },
         "mv <src> <dst> — move/rename file");
 
+    // help:列出所有命令及其用法说明(从命令表里取)。
     reg.register_cmd(
         "help",
         [&reg](IFileSystem&, UserManager&, const std::vector<std::string>&,
@@ -992,6 +1008,7 @@ static void register_commands(CommandRegistry& reg) {
         },
         "help — list all commands");
 
+    // log [clear]:打印操作日志(时间/用户/命令行);带 clear 则清空日志。
     reg.register_cmd(
         "log",
         [&reg](IFileSystem&, UserManager&, const std::vector<std::string>& args,
@@ -1012,9 +1029,8 @@ static void register_commands(CommandRegistry& reg) {
                 std::time_t t = static_cast<std::time_t>(entries[i].time);
                 std::tm* lt = std::localtime(&t);
                 if (lt) std::strftime(ts, sizeof(ts), "%m-%d %H:%M:%S", lt);
-                // Fixed-width index + timestamp via snprintf; append the
-                // (unbounded) username and command line as strings so neither
-                // can overflow/truncate a fixed buffer.
+                // 定宽的序号+时间戳用 snprintf 拼;用户名和命令行(长度不定)以字符串追加,
+                // 这样谁都不会溢出/截断那个定长缓冲区。
                 char head[40];
                 std::snprintf(head, sizeof(head), "%3zu  %s  ", i + 1, ts);
                 out += head;
@@ -1030,12 +1046,14 @@ static void register_commands(CommandRegistry& reg) {
         },
         "log [clear] — show (or clear) the operation log");
 
+    // replay:按记录顺序把日志里的每条操作重新执行一遍。
     reg.register_cmd(
         "replay",
         [&reg](IFileSystem& fs, UserManager& um, const std::vector<std::string>&,
                std::string& out) -> int { return reg.replay(fs, um, out); },
         "replay — re-run every logged operation in order");
 
+    // exit:退出 PseudoFS。返回特殊串 __EXIT__,由主循环识别后跳出。
     reg.register_cmd(
         "exit",
         [](IFileSystem&, UserManager&, const std::vector<std::string>&, std::string& out) -> int {
@@ -1045,9 +1063,8 @@ static void register_commands(CommandRegistry& reg) {
         "exit — quit PseudoFS");
 }
 
-// CLI pager for `more`. Interactively (a TTY) shows `content` one screen at a
-// time with an --More-- prompt; when piped/redirected it just dumps everything
-// so scripts and tests are unaffected.
+// `more` 的 CLI 分页器。交互式(TTY)下带 --More-- 提示一屏一屏地显示 content;
+// 被管道/重定向时直接全量输出,脚本和测试不受影响。
 static void cli_page(const std::string& content) {
     if (!isatty(fileno(stdin))) {
         std::fwrite(content.data(), 1, content.size(), stdout);
@@ -1075,27 +1092,27 @@ static void cli_page(const std::string& content) {
         std::printf("\033[7m--More-- (%d/%d) [Enter=more, q=quit]\033[0m",
                     std::min(top + page, total), total);
         std::fflush(stdout);
-        // Read the key via the shared buffered reader. Ctrl+C (or EOF) quits
-        // the pager and returns to the prompt rather than killing the program.
+        // 按键也走那个共享的带缓冲读取器。Ctrl+C(或 EOF)退出分页器回到提示符,而不是杀程序。
         char ch;
         int r = read_char(&ch);
-        if (r <= 0) {  // EOF or interrupted -> quit pager
+        if (r <= 0) {  // EOF 或被打断 -> 退出分页器
             if (r < 0 && errno == EINTR && g_sigint) g_sigint = 0;
             std::printf("\r\033[K");
             break;
         }
         int c = static_cast<unsigned char>(ch);
         if (c != '\n') {
-            while (true) {  // swallow the rest of the input line
+            while (true) {  // 把这一行剩下的输入吞掉
                 char d;
                 if (read_char(&d) != 1 || d == '\n') break;
             }
         }
-        std::printf("\r\033[K");  // erase the --More-- prompt
+        std::printf("\r\033[K");  // 擦掉 --More-- 提示
         if (c == 'q' || c == 'Q') break;
     }
 }
 
+// 程序入口:解析命令行开关 → 初始化命令表/用户/信号 → 按 TUI 或 CLI 模式起引擎跑主循环。
 int main(int argc, char* argv[]) {
     bool use_tui = false;
     bool use_fat16 = false;
@@ -1109,25 +1126,23 @@ int main(int argc, char* argv[]) {
 
     CommandRegistry reg;
     register_commands(reg);
-    reg.set_log_path("pfs_ops.log");  // persistent operation log (C-05)
+    reg.set_log_path("pfs_ops.log");  // 持久化操作日志(C-05)
 
     UserManager um;
-    if (!force_format) um.load_from_file(USERS_FILE);  // restore prior accounts
-    um.set_persist_path(USERS_FILE);                   // auto-save on useradd/passwd
-    if (force_format) um.save_to_file(USERS_FILE);     // --format: reset to root
-    // Begin the session as root so the login state matches the engine's default
-    // uid=0 context: `useradd` works immediately and the UI shows "root" rather
-    // than the misleading "logged out yet acting as root". `logout` still drops
-    // the session; users can `login`/`su` to any account afterwards.
+    if (!force_format) um.load_from_file(USERS_FILE);  // 恢复以前的账户
+    um.set_persist_path(USERS_FILE);                   // useradd/passwd 时自动落盘
+    if (force_format) um.save_to_file(USERS_FILE);     // --format:重置为只有 root
+    // 会话以 root 身份开始,这样登录态跟引擎默认的 uid=0 上下文一致:`useradd` 开箱即用,
+    // 界面显示 "root" 而不是那种"已注销却仍以 root 身份操作"的误导态。`logout` 仍会丢掉会话;
+    // 之后用户可以 `login`/`su` 到任意账户。
     um.login_root();
 
-    // Install the SIGINT (Ctrl+C) handler before either mode starts.
-    //  - CLI: read_line() sees the EINTR and cancels the current input line.
-    //  - TUI: wgetch() returns ERR (handled as a normal "refresh" tick), so
-    //    Ctrl+C is simply ignored — F10 exits. Because we install this first,
-    //    ncurses leaves SIGINT to us (it only catches signals left at SIG_DFL),
-    //    so Ctrl+C no longer kills the TUI and corrupts the terminal.
-    // No SA_RESTART, so the blocked read(2)/wgetch returns EINTR.
+    // 在两种模式启动之前先装好 SIGINT(Ctrl+C)处理。
+    //  - CLI:read_line() 见到 EINTR 后取消当前输入行。
+    //  - TUI:wgetch() 返回 ERR(当成普通的"刷新"节拍处理),所以 Ctrl+C 直接被忽略——退出用 F10。
+    //    因为我们先装了它,ncurses 就把 SIGINT 留给我们(它只接管那些还是 SIG_DFL 的信号),
+    //    于是 Ctrl+C 不再杀掉 TUI 也不会搞乱终端。
+    // 不带 SA_RESTART,这样阻塞中的 read(2)/wgetch 会返回 EINTR。
     struct sigaction sa;
     std::memset(&sa, 0, sizeof(sa));
     sa.sa_handler = handle_sigint;
@@ -1136,12 +1151,10 @@ int main(int argc, char* argv[]) {
     sigaction(SIGINT, &sa, nullptr);
 
     if (use_tui) {
-        // --- TUI mode: each engine gets its OWN BlockDevice ---
-        // UNIX and FAT16 have incompatible on-disk layouts; sharing one device
-        // means whichever engine formats/loads last clobbers the other's bytes,
-        // and fs_mount() (which only re-reads the device buffer) then sees
-        // garbage. Independent devices let both stay mounted at once, so F2
-        // just swaps the active pointer and each saves to its own image.
+        // --- TUI 模式:每个引擎用各自独立的 BlockDevice ---
+        // UNIX 和 FAT16 的磁盘布局互不兼容;共用一个设备的话,后格式化/加载的那个引擎会把
+        // 另一个的字节覆盖掉,而 fs_mount()(只是重读设备缓冲区)接着就读到一堆垃圾。
+        // 独立设备让两者能同时挂载,于是 F2 只需切换活动指针,各自存到各自的镜像。
         const char* unix_img = "pfs_tui_unix.img";
         const char* fat16_img = "pfs_tui_fat16.img";
 
@@ -1152,7 +1165,7 @@ int main(int argc, char* argv[]) {
         unix_fs.set_disk_path(unix_img);
         fat16_fs.set_disk_path(fat16_img);
 
-        // Each engine: load its image + mount, else format fresh.
+        // 每个引擎:加载自己的镜像并挂载,失败则全新格式化。
         if (force_format || unix_dev.load_from_file(unix_img) != 0) {
             unix_fs.fs_format();
         } else if (unix_fs.fs_mount() != 0) {
@@ -1172,7 +1185,7 @@ int main(int argc, char* argv[]) {
         Tui tui(*primary, *alt, um, reg);
         tui.run();
 
-        // Persist each engine to its own image — no cross-clobber.
+        // 各引擎各存各的镜像——不会互相覆盖。
         unix_fs.fs_unmount();
         fat16_fs.fs_unmount();
         unix_dev.save_to_file(unix_img);
@@ -1181,7 +1194,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    // --- CLI mode ---
+    // --- CLI 模式 ---
     const char* disk_path = use_fat16 ? FAT16_DISK : UNIX_DISK;
 
     BlockDevice dev(TOTAL_BLK_NUM, BLOCK_SIZE);
@@ -1207,7 +1220,7 @@ int main(int argc, char* argv[]) {
                 fs->fs_type_name().c_str());
 
     std::vector<std::string> history;
-    // Register history command after history vector exists
+    // history 命令依赖 history 向量,所以等它存在后再注册
     reg.register_cmd(
         "history",
         [&history](IFileSystem&, UserManager&, const std::vector<std::string>&,
@@ -1221,17 +1234,16 @@ int main(int argc, char* argv[]) {
         },
         "history — show command history");
 
-    // Buffered read(2)-based input: command lines are unbounded (no char[1024]
-    // + fgets cap that truncated long `write` bodies and leaked the overflow as
-    // a bogus next command), and Ctrl+C is handled cleanly.
+    // 基于 read(2) 的带缓冲输入:命令行长度无上限(不再有 char[1024]+fgets 的截断问题——
+    // 那会把长 `write` 内容截掉,溢出部分还漏成一条莫名其妙的下一条命令),Ctrl+C 也处理得干净。
     std::string input;
     while (true) {
         std::printf("\033[32m%s\033[0m$ ", fs->fs_pwd().c_str());
         std::fflush(stdout);
         LineResult lr = read_line(input);
-        if (lr == LineResult::Eof) break;       // Ctrl+D / closed pipe -> quit
-        if (lr == LineResult::Canceled) {  // Ctrl+C -> abandon line, re-prompt
-            // The terminal already echoes "^C"; just break the line like a shell.
+        if (lr == LineResult::Eof) break;       // Ctrl+D / 管道关闭 -> 退出
+        if (lr == LineResult::Canceled) {  // Ctrl+C -> 丢弃本行,重新出提示符
+            // 终端已经回显了 "^C";像 shell 那样换个行就行。
             std::printf("\n");
             continue;
         }
@@ -1245,7 +1257,7 @@ int main(int argc, char* argv[]) {
         if (output == "__EXIT__") break;
         const std::string pager(PAGER_PREFIX);
         if (output.rfind(pager, 0) == 0) {
-            cli_page(output.substr(pager.size()));  // `more`: paged display
+            cli_page(output.substr(pager.size()));  // `more`:分页显示
         } else if (!output.empty()) {
             if (ret != 0)
                 std::printf("\033[31m%s\033[0m\n", output.c_str());

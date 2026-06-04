@@ -12,6 +12,9 @@
 
 namespace pfs {
 
+// UNIX 引擎:把 IFileSystem 接口落到 inode 体系上。
+// 自己不直接碰盘,而是组合超级块、inode、目录三个下层模块,
+// 再加一张打开文件表,凑齐 open/read/write/create/delete/... 全套命令。
 class UnixFs : public IFileSystem {
    public:
     explicit UnixFs(BlockDevice& dev);
@@ -44,13 +47,12 @@ class UnixFs : public IFileSystem {
     DiskUsage fs_disk_usage() const override;
     void fs_block_map(std::vector<uint8_t>& out) override;
 
-    // uid/gid: actual UNIX ids used for permission checks
+    // uid/gid:权限检查实际用到的 UNIX 用户号/组号
     void set_user(uint16_t uid, uint16_t gid) override;
 
-    // Set the disk image path for auto-sync. When set, every write
-    // operation (create/write/delete/mkdir/rmdir/chmod/link) flushes
-    // the superblock and saves the disk image to this file.
-    // Prevents data loss on crash.
+    // 设置磁盘镜像路径以开启自动落盘。一旦设置,每次写操作
+    //(create/write/delete/mkdir/rmdir/chmod/link)都会 flush 超级块
+    // 并把磁盘镜像存到这个文件,防止崩溃丢数据。
     void set_disk_path(const std::string& path);
 
    private:
@@ -72,12 +74,11 @@ class UnixFs : public IFileSystem {
 
     bool check_access(MemINode* ip, uint8_t required);
 
-    // Resolve a path to an inode, following a trailing symlink (up to a small
-    // hop limit, so cycles/broken links fail rather than loop). Used by the
-    // operations that should act on a link's target (open, chdir).
+    // 把路径解析成 inode,并跟随末端的软链接(限制跳数,这样成环/断链
+    // 会失败而不是死循环)。给那些应当作用于链接目标的操作用(open、chdir)。
     uint16_t namei_follow(const char* path);
 
-    // Read a symlink inode's stored target path from its first data block.
+    // 从软链接 inode 的第一个数据块里读出它存的目标路径字符串。
     std::string read_link_target(MemINode* ip);
 };
 
