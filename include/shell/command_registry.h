@@ -58,15 +58,15 @@ class CommandRegistry {
    private:
     // 注册表里一条命令的内容:执行用的 handler + 帮助显示用的 usage。
     struct CmdEntry {
-        CmdHandler handler;
-        std::string usage;
+        CmdHandler handler;  // 执行函数
+        std::string usage;   // help 显示的用法说明
     };
 
     // 一个命令行 token,外加它是不是被双引号包过。带引号的 token 不参与 glob
     // 展开(所以 `write 0 "*"` 写进去的是一个字面星号)。
     struct Token {
-        std::string text;
-        bool quoted;
+        std::string text;  // token 文本(引号已剥掉)
+        bool quoted;       // 是否被双引号包过
     };
 
     // 跟 tokenize() 一样,但额外报告每个 token 的引号状态。tokenize() 转调它,
@@ -84,8 +84,8 @@ class CommandRegistry {
     // 按插入顺序排,不是按字母序
     std::vector<std::pair<std::string, CmdEntry>> commands_;
 
-    std::vector<LogEntry> log_;
-    std::string log_path_;
+    std::vector<LogEntry> log_;  // 内存中的操作日志,最早的在前
+    std::string log_path_;       // 日志文件路径,为空表示不持久化
     bool suppress_log_ = false;  // replay() 运行期间为 true
 };
 

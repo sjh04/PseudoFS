@@ -20,7 +20,7 @@ struct SysOpenFileEntry {
 // 映射到系统打开文件表的下标。
 // 值为 -1 表示该 fd 槽空闲。
 struct UserOpenFiles {
-    int16_t ofile[MAX_OPEN_FILE];
+    int16_t ofile[MAX_OPEN_FILE];  // ofile[fd] = 系统表下标,-1 = 该 fd 槽空闲
 };
 
 // 打开文件表:系统表 + 每用户用户表两层。用户表 ofile[fd] 存系统表下标,
@@ -55,8 +55,8 @@ class OpenFileTable {
     void close_all(uint16_t user_id);
 
    private:
-    SysOpenFileEntry sys_table_[SYS_OPEN_FILE];
-    UserOpenFiles user_table_[MAX_USER];
+    SysOpenFileEntry sys_table_[SYS_OPEN_FILE];  // 系统打开文件表(全局一张)
+    UserOpenFiles user_table_[MAX_USER];         // 用户打开文件表(每用户一张)
 
     int alloc_sys_entry();
     bool valid_user_fd(uint16_t user_id, int fd) const;

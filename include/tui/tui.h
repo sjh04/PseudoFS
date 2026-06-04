@@ -21,9 +21,9 @@ class Tui {
    private:
     IFileSystem* fs_;       // 当前引擎(F2 与 alt_fs_ 互换)
     IFileSystem* alt_fs_;   // 后台的另一个引擎,切换前先 unmount/mount
-    UserManager* um_;
-    CommandRegistry* reg_;
-    bool running_;
+    UserManager* um_;       // 用户管理器,状态栏显示当前用户/登录态
+    CommandRegistry* reg_;  // 命令分发器,终端输入交给它执行
+    bool running_;          // 事件循环运行标志,F10 置 false 退出
 
     // ncurses 窗口指针打包(run() 调用前为 null)
     struct Windows;

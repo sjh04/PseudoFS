@@ -60,8 +60,8 @@ class DirectoryManager {
     bool is_empty(MemINode* dir_ip);
 
    private:
-    BlockDevice& dev_;
-    InodeManager& imng_;
+    BlockDevice& dev_;    // 底层块设备,读写目录数据块用
+    InodeManager& imng_;  // inode 管理器,经 bmap 定位目录的数据块
 
     // 把路径切成各段。"/home/alice" → ["home", "alice"]
     std::vector<std::string> split_path(const char* path);

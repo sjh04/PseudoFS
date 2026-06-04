@@ -7,18 +7,19 @@
 
 namespace pfs {
 
-constexpr uint8_t ACCESS_READ = 1;
-constexpr uint8_t ACCESS_WRITE = 2;
-constexpr uint8_t ACCESS_EXEC = 4;
+// check_access() 的权限种类
+constexpr uint8_t ACCESS_READ = 1;   // 读
+constexpr uint8_t ACCESS_WRITE = 2;  // 写
+constexpr uint8_t ACCESS_EXEC = 4;   // 执行(目录 = 可进入)
 
-constexpr uint32_t PWDSIZ = 12;
+constexpr uint32_t PWDSIZ = 12;  // 用户名/密码的最大长度
 
 // 一条用户记录:uid/gid + 用户名 + 密码(明文,够课设演示用)。
 struct UserRecord {
-    uint16_t uid;
-    uint16_t gid;
-    char username[PWDSIZ];
-    char password[PWDSIZ];
+    uint16_t uid;           // 用户号
+    uint16_t gid;           // 组号
+    char username[PWDSIZ];  // 用户名
+    char password[PWDSIZ];  // 密码(明文)
 };
 
 // 用户管理器:登录/登出、useradd/passwd/su,以及 rwx 权限检查。
@@ -73,9 +74,9 @@ class UserManager {
     void set_persist_path(const std::string& path);
 
    private:
-    UserRecord users_[MAX_USER];
-    int user_count_;
-    int current_index_;         // -1 表示无人登录
+    UserRecord users_[MAX_USER];  // 用户表
+    int user_count_;              // 已注册用户数
+    int current_index_;         // 当前登录用户在 users_ 中的下标,-1 表示无人登录
     std::string persist_path_;  // 为空表示关闭自动保存
 };
 

@@ -6,14 +6,16 @@
 
 namespace pfs {
 
-constexpr int O_READ = 1;
-constexpr int O_WRITE = 2;
-constexpr int O_APPEND = 4;
-constexpr int O_TRUNC = 8;  // 打开时丢弃原有内容(例如 `open f w`)
+// 打开模式标志(可按位组合)
+constexpr int O_READ = 1;    // 读
+constexpr int O_WRITE = 2;   // 写
+constexpr int O_APPEND = 4;  // 追加写,偏移定位到文件尾
+constexpr int O_TRUNC = 8;   // 打开时丢弃原有内容(例如 `open f w`)
 
-constexpr uint8_t TYPE_FILE = 0;
-constexpr uint8_t TYPE_DIR = 1;
-constexpr uint8_t TYPE_SYMLINK = 2;
+// DirEntry/FileStat 的 type 字段取值
+constexpr uint8_t TYPE_FILE = 0;     // 普通文件
+constexpr uint8_t TYPE_DIR = 1;      // 目录
+constexpr uint8_t TYPE_SYMLINK = 2;  // 符号链接
 
 // fs_block_map() 给磁盘视图返回的每块状态分类。
 constexpr uint8_t BLK_FREE = 0;  // 可分配,当前空闲

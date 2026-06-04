@@ -71,8 +71,8 @@ class SuperBlock {
     void set_root_inode(uint16_t ino);
 
    private:
-    BlockDevice& dev_;
-    DiskSuperBlock sb_;
+    BlockDevice& dev_;   // 底层块设备,所有磁盘读写经它进行
+    DiskSuperBlock sb_;  // 超级块的内存副本,load() 读入、flush() 落盘
 };
 
 }  // namespace pfs

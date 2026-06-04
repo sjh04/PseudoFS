@@ -28,9 +28,9 @@ class BlockDevice {
     void zero_all();
 
    private:
-    uint8_t* disk_;
-    uint32_t total_blocks_;
-    uint32_t block_size_;
+    uint8_t* disk_;          // 整块虚拟磁盘的内存缓冲区
+    uint32_t total_blocks_;  // 总块数
+    uint32_t block_size_;    // 块大小(字节)
 };
 
 }  // namespace pfs

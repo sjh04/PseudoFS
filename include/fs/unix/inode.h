@@ -69,14 +69,14 @@ class InodeManager {
     void truncate(MemINode* ip);
 
    private:
-    BlockDevice& dev_;
-    SuperBlock& sb_;
+    BlockDevice& dev_;  // 底层块设备,读写 inode 区和间址块
+    SuperBlock& sb_;    // 超级块,块/inode 的分配回收(balloc/bfree/ialloc/ifree)找它
 
     // 缓存:简单的线性数组。工业级系统用哈希表,
     // 但对 256 个 inode 来说这样够用了。
-    static constexpr int CACHE_SIZE = 64;
-    MemINode cache_[CACHE_SIZE];
-    bool cache_used_[CACHE_SIZE];
+    static constexpr int CACHE_SIZE = 64;  // 缓存槽数
+    MemINode cache_[CACHE_SIZE];           // 内存 inode 槽位
+    bool cache_used_[CACHE_SIZE];          // 槽位占用标记
 
     // 磁盘 I/O 辅助
     void read_dinode(uint16_t ino, DiskINode& di);

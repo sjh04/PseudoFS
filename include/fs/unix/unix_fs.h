@@ -57,20 +57,20 @@ class UnixFs : public IFileSystem {
 
    private:
     void sync();
-    BlockDevice& dev_;
-    SuperBlock sb_;
-    InodeManager imng_;
-    DirectoryManager dmng_;
-    OpenFileTable oft_;
+    BlockDevice& dev_;       // 底层块设备
+    SuperBlock sb_;          // 超级块:空闲块(成组链)+ 空闲 inode 栈
+    InodeManager imng_;      // inode 管理:iget/iput/混合索引 bmap
+    DirectoryManager dmng_;  // 目录管理:namei/目录项增删查
+    OpenFileTable oft_;      // 打开文件表:fd → inode + 偏移
 
-    uint16_t root_ino_;
-    uint16_t cwd_ino_;
-    std::string cwd_path_;
-    uint16_t cur_uid_;
-    uint16_t cur_gid_;
-    bool mounted_;
-    std::string disk_path_;
-    uint16_t user_slot_;
+    uint16_t root_ino_;      // 根目录 inode 号,绝对路径解析的起点
+    uint16_t cwd_ino_;       // 当前工作目录的 inode 号,相对路径解析的起点
+    std::string cwd_path_;   // 当前工作目录的路径字符串,pwd 直接返回它
+    uint16_t cur_uid_;       // 当前用户号,权限检查用
+    uint16_t cur_gid_;       // 当前组号,权限检查用
+    bool mounted_;           // 是否已挂载
+    std::string disk_path_;  // 磁盘镜像路径,非空则每次写操作后自动落盘
+    uint16_t user_slot_;     // 打开文件表槽位(单活动用户,固定用 0 号槽)
 
     bool check_access(MemINode* ip, uint8_t required);
 
