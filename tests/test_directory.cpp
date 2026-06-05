@@ -20,7 +20,9 @@ class DirectoryTest : public ::testing::Test {
     uint16_t root_ino = 0;
 
     void SetUp() override {
-        sb.format(0, 0);
+        // 保留 inode 0 作哨兵(d_ino==0 = 目录空槽),否则 root 会拿到 0 号,
+        // 指向 root 的 . / .. 会被误判成空槽。与生产 fs_format 一致。
+        sb.format(0, 1);
 
         // Create root directory
         root_ip = imng.alloc(MODE_DIR | DEFAULT_MODE, 0, 0);

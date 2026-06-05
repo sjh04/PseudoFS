@@ -76,12 +76,19 @@ void SuperBlock::format(uint16_t reserved_blocks, uint16_t reserved_inodes) {
 
     sb_.s_free_total = total_free;
 
-    // 建空闲 inode 栈:跳过保留 inode,按号顺序装,至多 NICINOD 个
-    sb_.s_ninode = 0;
-    for (uint16_t i = reserved_inodes; i < INODE_TOTAL && sb_.s_ninode < NICINOD; i++) {
-        sb_.s_inode[sb_.s_ninode++] = i;
+    // 建空闲 inode 栈。ialloc 从栈顶弹,所以这里按号从大到小压栈,
+    // 让最小的空闲 inode 落在栈顶——format 后第一个 alloc(根目录)就拿到
+    // reserved_inodes 号,整体呈升序发号,与课件/直觉一致(根目录 = inode 1)。
+    uint16_t stack_cnt = NICINOD;
+    if (INODE_TOTAL - reserved_inodes < stack_cnt) {
+        stack_cnt = INODE_TOTAL - reserved_inodes;
     }
-    sb_.s_rinode = reserved_inodes + sb_.s_ninode;
+    sb_.s_ninode = 0;
+    for (uint16_t k = 0; k < stack_cnt; k++) {
+        // 从高号往低号压入,最后压入(栈顶)的是最小号 reserved_inodes
+        sb_.s_inode[sb_.s_ninode++] = reserved_inodes + (stack_cnt - 1 - k);
+    }
+    sb_.s_rinode = reserved_inodes + stack_cnt;
     sb_.s_inode_total = INODE_TOTAL - reserved_inodes;
 
     flush();

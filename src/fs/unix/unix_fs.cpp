@@ -30,11 +30,12 @@ UnixFs::UnixFs(BlockDevice& dev)
 int UnixFs::fs_format() {
     dev_.zero_all();
 
-    // 保留 inode 0(空哨兵,不用)和 inode 1(根目录)。
+    // 只保留 inode 0(空哨兵,d_ino==0 表示目录空槽,不能分给真实文件)。
     // 保留数据块 0..2(根目录、etc 目录、密码文件,对齐 PPT)。
-    sb_.format(3, 2);
+    sb_.format(3, 1);
 
-    // 在 inode 1 上建根目录
+    // 建根目录。ialloc 升序发号,format 后第一个空闲 inode 就是 1 号,
+    // 所以根目录固定落在 inode 1(对齐 UNIX 惯例 / 课件)。
     MemINode* root_ip = imng_.alloc(MODE_DIR | DEFAULT_MODE, 0, 0);
     if (root_ip == nullptr) {
         return -1;
