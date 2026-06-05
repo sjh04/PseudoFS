@@ -93,18 +93,26 @@ class Fat16Fs : public IFileSystem {
    private:
     void sync();
     // --- FAT16 磁盘布局常量 ---
-    // 块号: [0]引导 / [1..4]FAT1 / [5..8]FAT2 / [9]根目录区 / [10..]数据区
-    static constexpr uint32_t kBootBlk = 0;     // 引导扇区
-    static constexpr uint32_t kFat1Start = 1;   // FAT1 起始块
-    static constexpr uint32_t kFatSize = 4;     // 每张 FAT 占的块数
-    static constexpr uint32_t kFat2Start = 5;   // FAT2(备份)起始块
-    static constexpr uint32_t kRootDirBlk = 9;  // 根目录区
-    static constexpr uint32_t kDataStart = 10;  // 数据区起始块
+    // 块号: [0]引导 / [FAT1] / [FAT2] / [根目录区] / [数据区]
+    // 布局全部由 kFatSize 推导:每张 FAT 必须装得下所有数据簇的表项
+    // (kClustersPerFat >= 2 + kDataBlkCount),否则高号簇没有 FAT 槽位会损坏。
+    // 数据区 2048 块时数据簇约 2062 个,需 9 块 FAT(9*256=2304 项)才够。
+    static constexpr uint32_t kBootBlk = 0;                          // 引导扇区
+    static constexpr uint32_t kFat1Start = 1;                        // FAT1 起始块
+    static constexpr uint32_t kFatSize = 9;                          // 每张 FAT 占的块数
+    static constexpr uint32_t kFat2Start = kFat1Start + kFatSize;    // FAT2(备份)起始块
+    static constexpr uint32_t kRootDirBlk = kFat2Start + kFatSize;   // 根目录区
+    static constexpr uint32_t kDataStart = kRootDirBlk + 1;          // 数据区起始块
     static constexpr uint32_t kEntriesPerFatBlk = BLOCK_SIZE / 2;              // 256
     static constexpr uint32_t kDirEntriesPerBlk = BLOCK_SIZE / 32;             // 16
-    static constexpr uint32_t kClustersPerFat = kFatSize * kEntriesPerFatBlk;  // 1024
-    static constexpr uint32_t kDataBlkCount = TOTAL_BLK_NUM - kDataStart;      // 536
+    static constexpr uint32_t kClustersPerFat = kFatSize * kEntriesPerFatBlk;  // 2304
+    static constexpr uint32_t kDataBlkCount = TOTAL_BLK_NUM - kDataStart;      // 2062
     static constexpr uint16_t kRootCluster = 0;                                // 根目录的哨兵簇号
+
+    // FAT 必须为每个数据簇(簇号 2 .. 2+kDataBlkCount-1)留一个表项,否则
+    // 高号簇没有 FAT 槽位、分配/读写会越界损坏。改盘大小时若 FAT 不够会在此报错。
+    static_assert(kClustersPerFat >= 2 + kDataBlkCount,
+                  "FAT too small for data area: increase kFatSize");
 
     BlockDevice& dev_;   // 底层块设备
     OpenFileTable oft_;  // 打开文件表(与 UNIX 引擎共用同一套实现)

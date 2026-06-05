@@ -63,7 +63,7 @@ int BlockDevice::load_from_file(const char* path) {
     return (read_bytes == total) ? 0 : -1;
 }
 
-// 总块数(UNIX 引擎:1 引导 + 1 超级块 + 32 inode 区 + 512 数据区 = 546)
+// 总块数(UNIX 引擎:1 引导 + 1 超级块 + 32 inode 区 + 2048 数据区 = 2082)
 uint32_t BlockDevice::total_blocks() const {
     return total_blocks_;
 }

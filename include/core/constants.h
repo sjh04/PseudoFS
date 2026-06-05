@@ -12,8 +12,8 @@ constexpr uint32_t SUPER_BLK = 1;        // 超级块
 constexpr uint32_t INODE_START_BLK = 2;  // inode 区起始块号
 constexpr uint32_t INODE_BLK_NUM = 32;   // inode 区块数
 constexpr uint32_t DATA_START_BLK = INODE_START_BLK + INODE_BLK_NUM;  // 数据区起始块号 = 34
-constexpr uint32_t DATA_BLK_NUM = 512;                                // 数据区块数
-constexpr uint32_t TOTAL_BLK_NUM = DATA_START_BLK + DATA_BLK_NUM;     // 全盘总块数 = 546
+constexpr uint32_t DATA_BLK_NUM = 2048;                               // 数据区块数
+constexpr uint32_t TOTAL_BLK_NUM = DATA_START_BLK + DATA_BLK_NUM;     // 全盘总块数 = 2082
 
 // inode
 constexpr uint32_t INODE_SIZE = 64;                               // 每个磁盘 inode 占的字节数
